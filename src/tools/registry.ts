@@ -8,6 +8,7 @@ import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { z } from 'zod';
 import type { ToolResult } from './index.js';
 import { ErrorCode, createError } from '../types/errors.js';
+import { getCachedAccountType } from '../utils/auth-guards.js';
 
 /** Type-erased tool entry for the registry — avoids generic variance issues. */
 interface RegistryEntry {
@@ -64,6 +65,32 @@ const toolsByName = new Map<string, RegistryEntry>(
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
+ * Names of the tools that work with personal (Teams free) accounts.
+ * Every other tool is rejected with NOT_SUPPORTED while a personal session is active.
+ */
+export const PERSONAL_ACCOUNT_TOOLS: ReadonlySet<string> = new Set([
+  'teams_login',
+  'teams_status',
+  'teams_get_me',
+  'teams_list_chats',
+  'teams_get_chat',
+  'teams_get_thread',
+  'teams_get_message',
+  'teams_send_message',
+  'teams_edit_message',
+  'teams_delete_message',
+  'teams_add_reaction',
+  'teams_remove_reaction',
+  'teams_mark_read',
+  'teams_search_people',
+  'teams_get_person',
+  'teams_get_favorites',
+  'teams_add_favorite',
+  'teams_remove_favorite',
+  'teams_get_meetings',
+]);
+
+/**
  * Gets all tool definitions for MCP ListTools.
  */
 export function getToolDefinitions(): Tool[] {
@@ -87,6 +114,20 @@ export async function invokeTool(name: string, args: unknown): Promise<ToolResul
     return {
       success: false,
       error: createError(ErrorCode.INVALID_INPUT, `Unknown tool: ${name}`, { retryable: false }),
+    };
+  }
+
+  // Personal (Teams free) sessions only get the allowlisted tools. NOT_SUPPORTED is
+  // not an auth code, so the server's auto-login retry does not trigger.
+  if (getCachedAccountType() === 'personal' && !PERSONAL_ACCOUNT_TOOLS.has(name)) {
+    const allowed = [...PERSONAL_ACCOUNT_TOOLS].sort().join(', ');
+    return {
+      success: false,
+      error: createError(
+        ErrorCode.NOT_SUPPORTED,
+        `${name} is not available for personal (Teams free) accounts.`,
+        { retryable: false, suggestions: [`Tools available for personal accounts: ${allowed}`] },
+      ),
     };
   }
 
