@@ -267,4 +267,5 @@ export const TEAMS_HOSTS: readonly string[] = [
   'teams.microsoft.com',      // Commercial legacy
   'teams.microsoft.us',       // GCC-High
   'dod.teams.microsoft.us',   // DoD
+  'teams.live.com',           // Teams free / personal Microsoft accounts
 ];

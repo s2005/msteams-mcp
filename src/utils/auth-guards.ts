@@ -21,6 +21,7 @@ import {
   type RegionConfig,
 } from '../auth/token-extractor.js';
 import { clearTokenCache } from '../auth/session-store.js';
+import { getAccountType, type AccountType } from '../auth/account-type.js';
 import { DEFAULT_TEAMS_BASE_URL } from './api-config.js';
 import { TOKEN_REFRESH_THRESHOLD_MS, ASSIGNMENTS_UNAVAILABLE_TTL_MS } from '../constants.js';
 import { refreshTokensViaBrowser, refreshAssignmentsToken, refreshGraphToken } from '../auth/token-refresh.js';
@@ -328,6 +329,20 @@ export function getApiConfig(): ApiConfig {
 export function clearRegionCache(): void {
   cachedRegionConfig = undefined;
   cachedTenantId = undefined;
+  cachedAccountType = undefined;
+}
+
+/** Cached account type (undefined = not yet determined). */
+let cachedAccountType: AccountType | undefined = undefined;
+
+/**
+ * Gets the account type of the saved session, cached until clearRegionCache().
+ */
+export function getCachedAccountType(): AccountType {
+  if (cachedAccountType === undefined) {
+    cachedAccountType = getAccountType();
+  }
+  return cachedAccountType;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

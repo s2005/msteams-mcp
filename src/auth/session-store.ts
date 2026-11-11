@@ -14,6 +14,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { encrypt, decrypt } from './crypto.js';
+import { isPersonalSessionState, PERSONAL_TEAMS_BASE_URL } from './account-type.js';
 import { SESSION_EXPIRY_HOURS, TEAMS_HOSTS } from '../constants.js';
 import * as log from '../utils/logger.js';
 
@@ -215,6 +216,12 @@ function hasSubstrateSearchToken(
  */
 export function getTeamsOrigin(state: SessionState): SessionState['origins'][number] | null {
   if (!state.origins) return null;
+
+  // Personal (Teams free) sessions live on teams.live.com and hold opaque tokens
+  if (isPersonalSessionState(state)) {
+    const personal = state.origins.find(o => o.origin === PERSONAL_TEAMS_BASE_URL);
+    if (personal) return personal;
+  }
 
   const withSubstrate = state.origins.find(o => hasSubstrateSearchToken(o.localStorage));
   if (withSubstrate) return withSubstrate;

@@ -371,3 +371,127 @@ export const favoritesFolderResponse = {
     },
   ],
 };
+
+// ============================================================================
+// Session state fixtures (all values are FAKE)
+// ============================================================================
+
+/** Far-future MSAL expiresOn (seconds since epoch, as a string): year 2100. */
+export const FAKE_EXPIRES_FUTURE = '4102444800';
+/** Past MSAL expiresOn (seconds since epoch, as a string): year 2001. */
+export const FAKE_EXPIRES_PAST = '1000000000';
+
+const FAKE_CONSUMERS_TENANT = '9188040d-6c67-4c5b-b112-36a304b66dad';
+const FAKE_PERSONAL_HOME_ACCOUNT = `0000000000000000.${FAKE_CONSUMERS_TENANT}`;
+
+/** Builds a fake MSAL AccessToken localStorage item for the personal fixture. */
+function fakePersonalToken(name: string, target: string, secret: string, expiresOn: string) {
+  return {
+    name,
+    value: JSON.stringify({
+      credentialType: 'AccessToken',
+      homeAccountId: FAKE_PERSONAL_HOME_ACCOUNT,
+      realm: FAKE_CONSUMERS_TENANT,
+      target,
+      secret,
+      expiresOn,
+    }),
+  };
+}
+
+/**
+ * Teams free (personal account) session: teams.live.com origin with a consumers
+ * tenant MSAL cache, opaque access tokens, and the DISCOVER-REGION-GTM config.
+ */
+export const personalSessionState = {
+  cookies: [
+    { name: 'skypetoken_asm', value: 'fake-personal-skypetoken', domain: '.teams.live.com', path: '/' },
+    { name: 'authtoken', value: 'Bearer%3Dfake-personal-authtoken', domain: '.teams.live.com', path: '/' },
+    { name: 'skypetoken_asm', value: 'fake-work-skypetoken', domain: '.teams.microsoft.com', path: '/' },
+  ],
+  origins: [
+    {
+      origin: 'https://teams.live.com',
+      localStorage: [
+        {
+          name: 'DISCOVER-REGION-GTM',
+          value: JSON.stringify({
+            item: {
+              chatServiceAfd: 'https://teams.live.com/api/chatsvc/consumer',
+              middleTier: 'https://teams.live.com/api/mt',
+            },
+          }),
+        },
+        fakePersonalToken(
+          'msal-mt-token-old',
+          'https://mtsvc.fl.teams.microsoft.com/teams.mt.readwrite',
+          'fake-opaque-mt-token-old',
+          '4102444700',
+        ),
+        fakePersonalToken(
+          'msal-mt-token-new',
+          'https://mtsvc.fl.teams.microsoft.com/teams.mt.readwrite',
+          'fake-opaque-mt-token',
+          FAKE_EXPIRES_FUTURE,
+        ),
+        fakePersonalToken(
+          'msal-auth-token',
+          'https://auth.fl.teams.microsoft.com/teams.auth.readwrite',
+          'fake-opaque-auth-token',
+          FAKE_EXPIRES_FUTURE,
+        ),
+        fakePersonalToken(
+          'msal-auth-token-expired',
+          'https://auth.fl.teams.microsoft.com/teams.auth.readwrite',
+          'fake-opaque-auth-token-expired',
+          FAKE_EXPIRES_PAST,
+        ),
+        {
+          name: 'msal-refresh-token',
+          value: JSON.stringify({
+            credentialType: 'RefreshToken',
+            homeAccountId: FAKE_PERSONAL_HOME_ACCOUNT,
+            clientId: '4b3e8f46-56d3-427f-b1e2-d239b2ea6bca',
+            secret: 'fake-refresh-token',
+          }),
+        },
+      ],
+    },
+  ],
+};
+
+/** Work/school session: partitioned DISCOVER-REGION-GTM on teams.microsoft.com. */
+export const workSessionState = {
+  cookies: [
+    { name: 'skypetoken_asm', value: 'fake-work-skypetoken', domain: '.teams.microsoft.com', path: '/' },
+    { name: 'authtoken', value: 'Bearer%3Dfake-work-authtoken', domain: '.teams.microsoft.com', path: '/' },
+  ],
+  origins: [
+    {
+      origin: 'https://teams.microsoft.com',
+      localStorage: [
+        {
+          name: 'DISCOVER-REGION-GTM',
+          value: JSON.stringify({
+            item: {
+              chatServiceAfd: 'https://teams.microsoft.com/api/chatsvc/amer',
+              middleTier: 'https://teams.microsoft.com/api/mt/part/amer-02',
+              chatSvcAggAfd: 'https://teams.microsoft.com/api/csa/amer',
+            },
+          }),
+        },
+        {
+          name: 'msal-work-account',
+          value: JSON.stringify({
+            credentialType: 'AccessToken',
+            homeAccountId: 'fake-oid.11111111-2222-3333-4444-555555555555',
+            realm: '11111111-2222-3333-4444-555555555555',
+            target: 'https://api.spaces.skype.com/Authorization.ReadWrite',
+            secret: 'fake-not-a-jwt',
+            expiresOn: FAKE_EXPIRES_FUTURE,
+          }),
+        },
+      ],
+    },
+  ],
+};
