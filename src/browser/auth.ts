@@ -9,19 +9,11 @@ import {
   OVERLAY_STEP_PAUSE_MS,
   OVERLAY_COMPLETE_PAUSE_MS,
   TEAMS_HOSTS,
+  TEAMS_URL,
 } from '../constants.js';
-import { extractSubstrateToken } from '../auth/token-extractor.js';
+import { extractSubstrateToken, extractPersonalMtToken } from '../auth/token-extractor.js';
+import { getAccountType, CONSUMERS_TENANT_ID } from '../auth/account-type.js';
 import * as logger from '../utils/logger.js';
-
-/**
- * Default Teams URL for initial login.
- * 
- * For commercial tenants, this is teams.microsoft.com.
- * For GCC/GCC-High/DoD tenants, Microsoft's login flow will redirect users
- * to the appropriate URL (teams.microsoft.us, etc.) after authentication.
- * We then extract the correct base URL from DISCOVER-REGION-GTM for all API calls.
- */
-const TEAMS_URL = 'https://teams.microsoft.com';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Progress Overlay UI
@@ -234,7 +226,7 @@ export function isTeamsUrl(url: string): boolean {
 }
 
 /**
- * Navigates to Teams and checks authentication status.
+ * Navigates to the given Teams login URL and checks authentication status.
  * 
  * Uses a fast redirect-based detection: if we're not redirected to a login
  * page within a few seconds, the session is valid. This is much faster than
@@ -243,8 +235,8 @@ export function isTeamsUrl(url: string): boolean {
  * Returns isAuthenticated: false if we can't confirm we're on Teams, to avoid
  * silently failing with an invisible browser stuck on an unexpected page.
  */
-async function navigateToTeams(page: Page): Promise<AuthStatus> {
-  await page.goto(TEAMS_URL, { waitUntil: 'domcontentloaded' });
+async function navigateToTeams(page: Page, loginUrl: string): Promise<AuthStatus> {
+  await page.goto(loginUrl, { waitUntil: 'domcontentloaded' });
 
   // Login redirect happens ~3-4 seconds after navigation when the session is
   // invalid (MSAL tries silent auth first, then redirects). No redirect within
@@ -367,7 +359,7 @@ const TOKEN_REFRESH_POLL_INTERVAL_MS = 1000;
  */
 async function checkBrowserTokenExpiry(page: Page): Promise<number> {
   try {
-    return await page.evaluate(() => {
+    return await page.evaluate((consumersTenantId: string) => {
       const now = Date.now();
       let bestExpiry = -1;
 
@@ -378,6 +370,25 @@ async function checkBrowserTokenExpiry(page: Page): Promise<number> {
         try {
           const entry = JSON.parse(value);
           const target = entry.target as string | undefined;
+
+          // Personal (consumers tenant) accounts hold opaque tokens: any
+          // non-empty secret counts, with the expiry in expiresOn (seconds).
+          const isConsumers =
+            (typeof entry.realm === 'string' && entry.realm.includes(consumersTenantId)) ||
+            (typeof entry.homeAccountId === 'string' && entry.homeAccountId.includes(consumersTenantId));
+          if (isConsumers) {
+            if (typeof entry.secret !== 'string' || entry.secret.length === 0) continue;
+            const seconds = Number(entry.expiresOn);
+            if (!Number.isFinite(seconds) || seconds <= 0) continue;
+            const consumersExpiryMs = seconds * 1000;
+            if (consumersExpiryMs <= now) continue;
+            const consumersMins = Math.round((consumersExpiryMs - now) / 60000);
+            if (consumersMins > bestExpiry) {
+              bestExpiry = consumersMins;
+            }
+            continue;
+          }
+
           if (!target?.includes('SubstrateSearch')) continue;
 
           const secret = entry.secret as string | undefined;
@@ -401,7 +412,7 @@ async function checkBrowserTokenExpiry(page: Page): Promise<number> {
       }
 
       return bestExpiry;
-    });
+    }, CONSUMERS_TENANT_ID);
   } catch {
     return -1;
   }
@@ -457,18 +468,20 @@ async function waitForTokenRefresh(
  * @param onProgress - Callback for progress updates
  * @param showOverlay - Whether to show progress overlay (default: true for visible browsers)
  * @param headless - If true, throw immediately if user interaction is required (default: false)
+ * @param loginUrl - URL to open (default: TEAMS_URL; PERSONAL_LOGIN_URL for Teams free)
  */
 export async function ensureAuthenticated(
   page: Page,
   context: BrowserContext,
   onProgress?: (message: string) => void,
   showOverlay: boolean = true,
-  headless: boolean = false
+  headless: boolean = false,
+  loginUrl: string = TEAMS_URL,
 ): Promise<void> {
   const log = onProgress ?? console.log;
 
   log('Navigating to Teams...');
-  const status = await navigateToTeams(page);
+  const status = await navigateToTeams(page, loginUrl);
 
   if (status.isAuthenticated) {
     log('Teams loaded — saving session state.');
@@ -476,7 +489,9 @@ export async function ensureAuthenticated(
     
     // Check if the saved tokens are actually valid
     // Browser session cookies can outlive MSAL tokens (cookies last days, tokens ~1 hour)
-    const token = extractSubstrateToken();
+    // The account type comes from the session just saved: personal sessions
+    // carry no Substrate token, so they are judged by the opaque mt token.
+    const token = getAccountType() === 'personal' ? extractPersonalMtToken() : extractSubstrateToken();
     const tokenValid = token && token.expiry.getTime() > Date.now();
     
     if (tokenValid) {

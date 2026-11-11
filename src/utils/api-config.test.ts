@@ -15,6 +15,11 @@ import {
   getSkypeAuthHeaders,
   getCsaHeaders,
   getMessagingHeaders,
+  PERSONAL_CSA_API,
+  PERSONAL_MT_API,
+  MT_API,
+  getPersonalCsaHeaders,
+  getPersonalMtHeaders,
 } from './api-config.js';
 
 describe('DEFAULT_TEAMS_BASE_URL', () => {
@@ -235,5 +240,76 @@ describe('getMessagingHeaders', () => {
     
     expect(headers['Authentication']).toContain('skypetoken');
     expect(headers['Authorization']).toContain('Bearer');
+  });
+});
+
+describe('personal URL builders', () => {
+  const csa = 'https://teams.live.com/api/csa';
+  const mt = 'https://teams.live.com/api/mt';
+
+  it('builds CSA URLs without a region segment', () => {
+    expect(PERSONAL_CSA_API.conversationFolders(csa)).toBe(
+      'https://teams.live.com/api/csa/api/v1/teams/users/me/conversationFolders?supportsAdditionalSystemGeneratedFolders=true&supportsSliceItems=true',
+    );
+    expect(PERSONAL_CSA_API.teamsList(csa)).toBe(
+      'https://teams.live.com/api/csa/api/v3/teams/users/me?isPrefetch=false&enableMembershipSummary=true',
+    );
+    expect(PERSONAL_CSA_API.customEmojis(csa)).toBe('https://teams.live.com/api/csa/api/v1/customemoji/metadata');
+  });
+
+  it('mirrors the work CSA paths after the region segment', () => {
+    const work = CSA_API.conversationFolders('amer', 'https://teams.microsoft.com');
+    expect(work.replace('https://teams.microsoft.com/api/csa/amer', csa)).toBe(PERSONAL_CSA_API.conversationFolders(csa));
+  });
+
+  it('builds middle-tier URLs without an empty or consumer path segment', () => {
+    const urls = [
+      PERSONAL_MT_API.searchUsers(mt, 7),
+      PERSONAL_MT_API.fetchShortProfile(mt),
+      PERSONAL_MT_API.calendarView(mt),
+    ];
+    expect(urls[0]).toBe('https://teams.live.com/api/mt/beta/users/searchUsers?ggEnabled=true&resultCount=7');
+    expect(urls[1]).toBe(
+      'https://teams.live.com/api/mt/beta/users/fetchShortProfile?isMailAddress=false&enableGuest=true&skypeTeamsInfo=true',
+    );
+    expect(urls[2]).toBe('https://teams.live.com/api/mt/v2.1/me/calendars/calendarView');
+    for (const url of urls) {
+      expect(url.replace('https://', '')).not.toContain('//');
+      expect(url).not.toContain('consumer');
+    }
+  });
+
+  it('leaves work URLs unchanged', () => {
+    expect(CALENDAR_API.calendarView('amer-02', true)).toBe(
+      'https://teams.microsoft.com/api/mt/part/amer-02/v2.1/me/calendars/calendarView',
+    );
+    expect(MT_API.fetchShortProfile('emea', false)).toBe(
+      'https://teams.microsoft.com/api/mt/emea/beta/users/fetchShortProfile?isMailAddress=false&enableGuest=true&skypeTeamsInfo=true',
+    );
+  });
+});
+
+describe('personal header helpers', () => {
+  it('getPersonalCsaHeaders sends X-Skypetoken only', () => {
+    const headers = getPersonalCsaHeaders('fake-skype');
+    expect(headers).toEqual({
+      ...getTeamsHeaders('https://teams.live.com'),
+      'X-Skypetoken': 'fake-skype',
+    });
+    expect(headers['Authorization']).toBeUndefined();
+    expect(headers['Authentication']).toBeUndefined();
+  });
+
+  it('getPersonalMtHeaders sends Bearer mt token and X-Skypetoken', () => {
+    const headers = getPersonalMtHeaders('fake-skype', 'fake-mt');
+    expect(headers['Authorization']).toBe('Bearer fake-mt');
+    expect(headers['X-Skypetoken']).toBe('fake-skype');
+    expect(headers['Authentication']).toBeUndefined();
+    expect(headers['Origin']).toBe('https://teams.live.com');
+  });
+
+  it('work header helpers are unchanged', () => {
+    expect(getCsaHeaders('s', 'c')['Authentication']).toBe('skypetoken=s');
+    expect(getCsaHeaders('s', 'c')['X-Skypetoken']).toBeUndefined();
   });
 });

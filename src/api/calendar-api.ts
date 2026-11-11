@@ -5,7 +5,7 @@
  */
 
 import { httpRequest } from '../utils/http.js';
-import { CALENDAR_API, getTeamsHeaders } from '../utils/api-config.js';
+import { CALENDAR_API, PERSONAL_MT_API, getTeamsHeaders, getPersonalMtHeaders } from '../utils/api-config.js';
 import { type Result, ok, err } from '../types/result.js';
 import { ErrorCode, createError } from '../types/errors.js';
 import { requireSkypeSpacesAuth, getRegionConfig } from '../utils/auth-guards.js';
@@ -188,7 +188,7 @@ export async function getCalendarView(
   if (!authResult.ok) {
     return authResult;
   }
-  const { skypeToken, spacesToken } = authResult.value;
+  const { skypeToken, spacesToken, personal } = authResult.value;
 
   const regionConfig = getRegionConfig();
   if (!regionConfig) {
@@ -223,18 +223,24 @@ export async function getCalendarView(
 
   // Use the exact region-partition from session discovery
   // Some tenants use partitioned URLs (/api/mt/part/amer-02), others don't (/api/mt/emea)
-  const calendarUrl = CALENDAR_API.calendarView(regionConfig.regionPartition, regionConfig.hasPartition, regionConfig.teamsBaseUrl);
+  const calendarUrl = personal
+    ? PERSONAL_MT_API.calendarView(regionConfig.middleTierUrl)
+    : CALENDAR_API.calendarView(regionConfig.regionPartition, regionConfig.hasPartition, regionConfig.teamsBaseUrl);
   const url = `${calendarUrl}?${params.toString()}`;
+  // Personal accounts send the mt token with X-Skypetoken; work accounts send Authentication + Bearer
+  const headers = personal
+    ? getPersonalMtHeaders(skypeToken, spacesToken)
+    : {
+      ...getTeamsHeaders(regionConfig.teamsBaseUrl),
+      'Authentication': `skypetoken=${skypeToken}`,
+      'Authorization': `Bearer ${spacesToken}`,
+    };
 
   const response = await httpRequest<Record<string, unknown>>(
     url,
     {
       method: 'GET',
-      headers: {
-        ...getTeamsHeaders(regionConfig.teamsBaseUrl),
-        'Authentication': `skypetoken=${skypeToken}`,
-        'Authorization': `Bearer ${spacesToken}`,
-      },
+      headers,
     }
   );
 

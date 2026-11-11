@@ -2,12 +2,17 @@
  * Unit tests for tools/registry.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { z } from 'zod';
 
 // Mock the MCP SDK
 vi.mock('@modelcontextprotocol/sdk/types.js', () => ({
   Tool: {},
+}));
+
+const accountType = vi.hoisted(() => vi.fn(() => 'work'));
+vi.mock('../utils/auth-guards.js', () => ({
+  getCachedAccountType: accountType,
 }));
 
 vi.mock('./search-tools.js', () => ({
@@ -136,5 +141,55 @@ describe('invokeTool', () => {
       expect(result.error.code).toBe('INVALID_INPUT');
       expect(result.error.message).toContain('Invalid input');
     }
+  });
+});
+
+describe('invokeTool personal account guard', () => {
+  beforeEach(() => {
+    vi.mocked(getTool('teams_search_messages')!.handler).mockClear();
+    vi.mocked(getTool('teams_send_message')!.handler).mockClear();
+  });
+
+  afterEach(() => {
+    accountType.mockReturnValue('work');
+    vi.mocked(getTool('teams_search_messages')!.handler).mockClear();
+    vi.mocked(getTool('teams_send_message')!.handler).mockClear();
+  });
+
+  it('rejects a tool outside the allowlist on a personal account', async () => {
+    accountType.mockReturnValue('personal');
+    const result = await invokeTool('teams_search_messages', { query: 'x' });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.code).toBe('NOT_SUPPORTED');
+      expect(result.error.retryable).toBe(false);
+      expect(result.error.code).not.toBe('AUTH_REQUIRED');
+      expect(result.error.code).not.toBe('AUTH_EXPIRED');
+    }
+    expect(getTool('teams_search_messages')!.handler).not.toHaveBeenCalled();
+  });
+
+  it('lets the same tool through on a work account', async () => {
+    const result = await invokeTool('teams_search_messages', { query: 'x' });
+
+    expect(result.success).toBe(true);
+    expect(getTool('teams_search_messages')!.handler).toHaveBeenCalled();
+  });
+
+  it('lets an allowlisted tool through on a personal account', async () => {
+    accountType.mockReturnValue('personal');
+    const result = await invokeTool('teams_send_message', { conversationId: 'c', content: 'hi' });
+
+    expect(result.success).toBe(true);
+    expect(getTool('teams_send_message')!.handler).toHaveBeenCalled();
+  });
+
+  it('keeps the unknown-tool error on a personal account', async () => {
+    accountType.mockReturnValue('personal');
+    const result = await invokeTool('nonexistent_tool', {});
+
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error.code).toBe('INVALID_INPUT');
   });
 });

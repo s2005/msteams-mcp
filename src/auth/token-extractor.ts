@@ -14,6 +14,13 @@ import {
   getTeamsOrigin,
   type SessionState,
 } from './session-store.js';
+import {
+  getAccountType,
+  PERSONAL_SKYPEID_KEY,
+  PERSONAL_TEAMS_BASE_URL,
+  PERSONAL_MT_SCOPE,
+  PERSONAL_AUTH_SCOPE,
+} from './account-type.js';
 import { parseJwtProfile, type UserProfile } from '../utils/parsers.js';
 import { MRI_TYPE_PREFIX, ORGID_PREFIX, MRI_ORGID_PREFIX, ASSIGNMENTS_APP_ID, GRAPH_AUDIENCES } from '../constants.js';
 
@@ -111,6 +118,56 @@ function bestJwt(
 }
 
 /**
+ * Longest-lived unexpired MSAL AccessToken among entries whose `target`
+ * contains `targetIncludes`. Unlike bestJwt, the secret may be opaque (not a
+ * JWT), so expiry comes from the entry's `expiresOn` (seconds since epoch,
+ * stored as a string in the MSAL v2 cache).
+ */
+export function bestOpaqueToken(
+  state: SessionState | undefined,
+  targetIncludes: string,
+): SubstrateTokenInfo | null {
+  let best: SubstrateTokenInfo | null = null;
+  for (const item of teamsLocalStorage(state)) {
+    try {
+      const entry = JSON.parse(item.value) as {
+        credentialType?: string;
+        secret?: unknown;
+        target?: unknown;
+        expiresOn?: unknown;
+      };
+      if (entry.credentialType !== undefined && entry.credentialType !== 'AccessToken') continue;
+      if (typeof entry.secret !== 'string' || entry.secret.length === 0) continue;
+      if (typeof entry.target !== 'string' || !entry.target.includes(targetIncludes)) continue;
+      const seconds = Number(entry.expiresOn);
+      if (!Number.isFinite(seconds) || seconds <= 0) continue;
+      const expiry = new Date(seconds * 1000);
+      if (expiry.getTime() <= Date.now()) continue;
+      if (!best || expiry > best.expiry) best = { token: entry.secret, expiry };
+    } catch {
+      continue;
+    }
+  }
+  return best;
+}
+
+/**
+ * Extracts the opaque middle-tier token of a personal (Teams free) session.
+ * Returns null when absent or expired.
+ */
+export function extractPersonalMtToken(state?: SessionState): SubstrateTokenInfo | null {
+  return bestOpaqueToken(state, PERSONAL_MT_SCOPE);
+}
+
+/**
+ * Extracts the opaque auth-service token of a personal (Teams free) session.
+ * Returns null when absent or expired.
+ */
+export function extractPersonalAuthToken(state?: SessionState): SubstrateTokenInfo | null {
+  return bestOpaqueToken(state, PERSONAL_AUTH_SCOPE);
+}
+
+/**
  * Extracts the Substrate search token from session state.
  * This token is used for search and people APIs.
  *
@@ -156,6 +213,26 @@ export function getSubstrateTokenStatus(): {
   minutesRemaining?: number;
 } {
   const extracted = extractSubstrateToken();
+  if (!extracted) return { hasToken: false };
+  return {
+    hasToken: true,
+    expiresAt: extracted.expiry.toISOString(),
+    minutesRemaining: Math.round((extracted.expiry.getTime() - Date.now()) / 60000),
+  };
+}
+
+/**
+ * Gets the status of the primary API token of the saved session: the Substrate
+ * token for work sessions, the opaque mt token for personal (Teams free) ones.
+ * Work sessions return exactly what getSubstrateTokenStatus() returns.
+ */
+export function getPrimaryTokenStatus(): {
+  hasToken: boolean;
+  expiresAt?: string;
+  minutesRemaining?: number;
+} {
+  if (getAccountType() !== 'personal') return getSubstrateTokenStatus();
+  const extracted = extractPersonalMtToken();
   if (!extracted) return { hasToken: false };
   return {
     hasToken: true,
@@ -276,6 +353,7 @@ export interface RegionConfig {
  * base URLs (e.g., teams.microsoft.us).
  */
 export function extractRegionConfig(state?: SessionState): RegionConfig | null {
+  const personal = getAccountType(state ?? readSessionState() ?? undefined) === 'personal';
   for (const item of teamsLocalStorage(state)) {
     if (!item.name.includes('DISCOVER-REGION-GTM')) continue;
 
@@ -323,6 +401,20 @@ export function extractRegionConfig(state?: SessionState): RegionConfig | null {
         }
       }
 
+      if (personal) {
+        // Teams free: single global middle tier, no partition, own CSA path
+        return {
+          region: 'consumer',
+          partition: '',
+          regionPartition: '',
+          hasPartition: false,
+          middleTierUrl: `${PERSONAL_TEAMS_BASE_URL}/api/mt`,
+          chatServiceUrl,
+          csaServiceUrl: `${PERSONAL_TEAMS_BASE_URL}/api/csa`,
+          teamsBaseUrl: PERSONAL_TEAMS_BASE_URL,
+        };
+      }
+
       return {
         region,
         partition: partition ?? '',
@@ -350,7 +442,8 @@ export function extractMessageAuth(state?: SessionState): MessageAuthInfo | null
   if (!sessionState) return null;
 
   const cookies = sessionState.cookies ?? [];
-  const teamsCookies = cookies.filter(c => c.domain?.includes('teams.microsoft.com'));
+  const cookieHost = getAccountType(sessionState) === 'personal' ? 'teams.live.com' : 'teams.microsoft.com';
+  const teamsCookies = cookies.filter(c => c.domain?.includes(cookieHost));
 
   // Extract the two required cookies
   const skypeToken = teamsCookies.find(c => c.name === 'skypetoken_asm')?.value ?? null;
@@ -365,8 +458,14 @@ export function extractMessageAuth(state?: SessionState): MessageAuthInfo | null
   }
 
   // Extract userMri from skypeToken's skypeid claim, or fall back to authToken's oid
-  const userMri = extractMriFromSkypeToken(skypeToken) 
+  let userMri = extractMriFromSkypeToken(skypeToken) 
     ?? extractMriFromAuthToken(authToken);
+
+  // Personal sessions: the consumer Skype token and mt token are opaque, so the
+  // Skype ID saved by the token refresh is the source of the MRI.
+  if (!userMri && getAccountType(sessionState) === 'personal') {
+    userMri = extractPersonalMri(sessionState);
+  }
 
   if (!userMri) return null;
 
@@ -388,8 +487,9 @@ export function getMessageAuthStatus(): {
   }
 
   const cookies = sessionState.cookies ?? [];
+  const cookieHost = getAccountType(sessionState) === 'personal' ? 'teams.live.com' : 'teams.microsoft.com';
   const skypeToken = cookies.find(
-    c => c.domain?.includes('teams.microsoft.com') && c.name === 'skypetoken_asm'
+    c => c.domain?.includes(cookieHost) && c.name === 'skypetoken_asm'
   )?.value;
 
   if (!skypeToken) {
@@ -412,7 +512,8 @@ export function getMessageAuthStatus(): {
   };
 }
 
-function extractMriFromSkypeToken(token: string): string | null {
+/** Maps a skypetoken_asm JWT's skypeid claim to a full MRI. Exported for tests. */
+export function extractMriFromSkypeToken(token: string): string | null {
   const payload = decodeJwtPayload(token);
   if (typeof payload?.skypeid !== 'string') return null;
   
@@ -423,8 +524,18 @@ function extractMriFromSkypeToken(token: string): string | null {
     return skypeid;
   } else if (skypeid.startsWith(ORGID_PREFIX)) {
     return `${MRI_TYPE_PREFIX}${skypeid}`;
+  } else if (skypeid.startsWith('live:')) {
+    // Personal accounts: 'live:<id>' -> '8:live:<id>'
+    return `${MRI_TYPE_PREFIX}${skypeid}`;
   }
   return skypeid;
+}
+
+/** Reads the Skype ID persisted by the consumer token exchange and returns it as an MRI. */
+function extractPersonalMri(state: SessionState): string | null {
+  const stored = teamsLocalStorage(state).find(item => item.name === PERSONAL_SKYPEID_KEY)?.value;
+  if (!stored) return null;
+  return stored.startsWith(MRI_TYPE_PREFIX) ? stored : `${MRI_TYPE_PREFIX}${stored}`;
 }
 
 function extractMriFromAuthToken(token: string): string | null {

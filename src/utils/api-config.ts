@@ -8,6 +8,7 @@
  */
 
 import { NOTIFICATIONS_ID } from '../constants.js';
+import { PERSONAL_TEAMS_BASE_URL } from '../auth/account-type.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Default URLs (fallbacks when session config unavailable)
@@ -98,6 +99,10 @@ export const CHATSVC_API = {
   deleteMessage: (region: string, conversationId: string, messageId: string, baseUrl = DEFAULT_TEAMS_BASE_URL) =>
     `${baseUrl}/api/chatsvc/${region}/v1/users/ME/conversations/${encodeURIComponent(conversationId)}/messages/${messageId}?behavior=softDelete`,
   
+  /** Get one thread with its member list (personal 1:1 lookup). */
+  threadWithMembers: (region: string, threadId: string, baseUrl = DEFAULT_TEAMS_BASE_URL) =>
+    `${baseUrl}/api/chatsvc/${region}/v1/threads/${encodeURIComponent(threadId)}?view=msnp24Equivalent`,
+
   /** Get consumption horizons (read receipts) for a thread. */
   consumptionHorizons: (region: string, threadId: string, baseUrl = DEFAULT_TEAMS_BASE_URL) =>
     `${baseUrl}/api/chatsvc/${region}/v1/threads/${encodeURIComponent(threadId)}/consumptionhorizons`,
@@ -213,6 +218,51 @@ export const CSA_API = {
 } as const;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Personal (Teams free) API builders
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * CSA endpoints for personal (Teams free) accounts.
+ *
+ * Mirrors CSA_API but takes the full CSA service URL (for example
+ * "https://teams.live.com/api/csa") instead of a region segment, because the
+ * consumer service has no region in its path.
+ */
+export const PERSONAL_CSA_API = {
+  /** Conversation folders (favourites) URL. */
+  conversationFolders: (csaServiceUrl: string) =>
+    `${csaServiceUrl}/api/v1/teams/users/me/conversationFolders?supportsAdditionalSystemGeneratedFolders=true&supportsSliceItems=true`,
+
+  /** Teams list URL. */
+  teamsList: (csaServiceUrl: string) =>
+    `${csaServiceUrl}/api/v3/teams/users/me?isPrefetch=false&enableMembershipSummary=true`,
+
+  /** Custom emoji metadata URL. */
+  customEmojis: (csaServiceUrl: string) =>
+    `${csaServiceUrl}/api/v1/customemoji/metadata`,
+} as const;
+
+/**
+ * Middle-tier endpoints for personal (Teams free) accounts.
+ *
+ * Take the full middle-tier URL (for example "https://teams.live.com/api/mt"),
+ * which has no region or partition segment.
+ */
+export const PERSONAL_MT_API = {
+  /** People search (POST). */
+  searchUsers: (middleTierUrl: string, resultCount: number) =>
+    `${middleTierUrl}/beta/users/searchUsers?ggEnabled=true&resultCount=${resultCount}`,
+
+  /** Batch resolve MRIs to user profiles (POST). */
+  fetchShortProfile: (middleTierUrl: string) =>
+    `${middleTierUrl}/beta/users/fetchShortProfile?isMailAddress=false&enableGuest=true&skypeTeamsInfo=true`,
+
+  /** Calendar view (GET). */
+  calendarView: (middleTierUrl: string) =>
+    `${middleTierUrl}/v2.1/me/calendars/calendarView`,
+} as const;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // EDU Assignments API
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -309,10 +359,38 @@ export function getCsaHeaders(skypeToken: string, csaToken: string, baseUrl = DE
   };
 }
 
+/** Teams web client version sent to chatsvc and the consumer authz endpoint. */
+export const TEAMS_CLIENT_VERSION = '1415/1.0.0.2025010401';
+
 /** Client version header for messaging API. */
 export function getMessagingHeaders(skypeToken: string, authToken: string, baseUrl = DEFAULT_TEAMS_BASE_URL): Record<string, string> {
   return {
     ...getSkypeAuthHeaders(skypeToken, authToken, baseUrl),
-    'X-Ms-Client-Version': '1415/1.0.0.2025010401',
+    'X-Ms-Client-Version': TEAMS_CLIENT_VERSION,
+  };
+}
+
+/**
+ * Headers for the CSA API of a personal (Teams free) account.
+ *
+ * Only `X-Skypetoken` authenticates; the consumer CSA rejects the
+ * `Authentication` header and takes no Authorization header.
+ */
+export function getPersonalCsaHeaders(skypeToken: string): Record<string, string> {
+  return {
+    ...getTeamsHeaders(PERSONAL_TEAMS_BASE_URL),
+    'X-Skypetoken': skypeToken,
+  };
+}
+
+/**
+ * Headers for the middle-tier API of a personal (Teams free) account:
+ * the opaque mt token as Bearer plus `X-Skypetoken`.
+ */
+export function getPersonalMtHeaders(skypeToken: string, mtToken: string): Record<string, string> {
+  return {
+    ...getTeamsHeaders(PERSONAL_TEAMS_BASE_URL),
+    'Authorization': `Bearer ${mtToken}`,
+    'X-Skypetoken': skypeToken,
   };
 }

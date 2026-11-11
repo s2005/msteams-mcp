@@ -2,6 +2,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('./token-extractor.js', () => ({
   extractSubstrateToken: vi.fn(),
+  extractPersonalMtToken: vi.fn(),
+}));
+
+vi.mock('./account-type.js', () => ({
+  getAccountType: vi.fn(() => 'work'),
+  PERSONAL_LOGIN_URL: 'https://teams.live.com/v2/',
 }));
 
 vi.mock('./session-store.js', () => ({
@@ -16,7 +22,8 @@ vi.mock('./token-refresh-http.js', () => ({
 }));
 
 import { refreshTokensViaBrowser } from './token-refresh.js';
-import { extractSubstrateToken } from './token-extractor.js';
+import { extractSubstrateToken, extractPersonalMtToken } from './token-extractor.js';
+import { getAccountType } from './account-type.js';
 import { refreshTokensViaHttp } from './token-refresh-http.js';
 import { createBrowserContext } from '../browser/context.js';
 
@@ -37,5 +44,20 @@ describe('refreshTokensViaBrowser', () => {
     expect(refreshTokensViaHttp).toHaveBeenCalledOnce();
     expect(createBrowserContext).not.toHaveBeenCalled();
     expect(result.ok).toBe(true);
+  });
+
+  it('judges a personal session by the mt token and opens no browser on HTTP success', async () => {
+    vi.mocked(getAccountType).mockReturnValue('personal');
+    vi.mocked(extractPersonalMtToken)
+      .mockReturnValueOnce({ token: 'fake-mt', expiry: new Date(Date.now() + 60 * 60 * 1000) });
+    vi.mocked(refreshTokensViaHttp).mockResolvedValue({ ok: true, value: undefined });
+
+    const result = await refreshTokensViaBrowser();
+
+    expect(refreshTokensViaHttp).toHaveBeenCalledOnce();
+    expect(extractSubstrateToken).not.toHaveBeenCalled();
+    expect(createBrowserContext).not.toHaveBeenCalled();
+    expect(result.ok).toBe(true);
+    vi.mocked(getAccountType).mockReturnValue('work');
   });
 });

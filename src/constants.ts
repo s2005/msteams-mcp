@@ -267,4 +267,15 @@ export const TEAMS_HOSTS: readonly string[] = [
   'teams.microsoft.com',      // Commercial legacy
   'teams.microsoft.us',       // GCC-High
   'dod.teams.microsoft.us',   // DoD
+  'teams.live.com',           // Teams free / personal Microsoft accounts
 ];
+
+/**
+ * Default Teams URL for work or school login.
+ *
+ * For commercial tenants, this is teams.microsoft.com.
+ * For GCC/GCC-High/DoD tenants, Microsoft's login flow redirects users to the
+ * appropriate URL (teams.microsoft.us, etc.) after authentication; the correct
+ * base URL for API calls is then extracted from DISCOVER-REGION-GTM.
+ */
+export const TEAMS_URL = 'https://teams.microsoft.com';

@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Page } from 'playwright';
 
 vi.mock('./context.js', () => ({ saveSessionState: vi.fn() }));
-vi.mock('../auth/token-extractor.js', () => ({ extractSubstrateToken: vi.fn() }));
+vi.mock('../auth/token-extractor.js', () => ({ extractSubstrateToken: vi.fn(), extractPersonalMtToken: vi.fn() }));
+vi.mock('../auth/account-type.js', () => ({
+  getAccountType: vi.fn(() => 'work'),
+  CONSUMERS_TENANT_ID: '9188040d-6c67-4c5b-b112-36a304b66dad',
+}));
 
 import { ensureAuthenticated, getAuthStatus, isTeamsUrl } from './auth.js';
 
@@ -16,6 +20,10 @@ function fakePage(url: string, tokenMinutes: number): Page {
 }
 
 describe('isTeamsUrl', () => {
+  it('accepts the personal Teams free host', () => {
+    expect(isTeamsUrl('https://teams.live.com/v2/')).toBe(true);
+  });
+
   it('covers every host Microsoft redirects Teams users to', () => {
     // New Teams settles on the bare host, with no path.
     for (const url of [

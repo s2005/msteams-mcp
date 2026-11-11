@@ -5,6 +5,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { getTeamsOrigin, type SessionState } from './session-store.js';
+import { personalSessionState } from '../__fixtures__/api-responses.js';
 
 function makeOrigin(
   origin: string,
@@ -80,5 +81,19 @@ describe('getTeamsOrigin', () => {
     };
 
     expect(getTeamsOrigin(state)).toBeNull();
+  });
+});
+
+describe('getTeamsOrigin for personal sessions', () => {
+  it('returns the teams.live.com origin even when another origin holds a Substrate token', () => {
+    const state: SessionState = {
+      cookies: [],
+      origins: [
+        makeOrigin('https://teams.cloud.microsoft', [makeSubstrateEntry()]),
+        ...(personalSessionState as SessionState).origins,
+      ],
+    };
+
+    expect(getTeamsOrigin(state)?.origin).toBe('https://teams.live.com');
   });
 });

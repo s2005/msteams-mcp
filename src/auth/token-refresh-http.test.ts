@@ -19,6 +19,9 @@ vi.mock('./session-store.js', () => ({
 import { refreshTokensViaHttp } from './token-refresh-http.js';
 import { readSessionState, writeSessionState, clearTokenCache, getTeamsOrigin } from './session-store.js';
 import type { SessionState } from './session-store.js';
+import { personalSessionState } from '../__fixtures__/api-responses.js';
+import { TEAMS_CLIENT_VERSION } from '../utils/api-config.js';
+import { PERSONAL_MT_SCOPE, PERSONAL_AUTH_SCOPE, PERSONAL_SKYPEID_KEY } from './account-type.js';
 
 // ============================================================================
 // Test Fixtures
@@ -552,4 +555,137 @@ describe('refreshTokensViaHttp', () => {
     expect(await refreshTokensViaHttp('graph')).toMatchObject({ ok: false, error: { code: 'ACCESS_DENIED', message: expect.stringContaining('Microsoft Graph') } });
   });
 
+});
+
+describe('refreshTokensViaHttp for a personal (Teams free) session', () => {
+  const PERSONAL_CLIENT_ID = '4b3e8f46-56d3-427f-b1e2-d239b2ea6bca';
+
+  /** Installs a deep copy of the personal fixture as the saved session. */
+  function installPersonalSession(): SessionState {
+    const state = JSON.parse(JSON.stringify(personalSessionState)) as SessionState;
+    vi.mocked(readSessionState).mockReturnValue(state);
+    vi.mocked(getTeamsOrigin).mockReturnValue(state.origins[0]);
+    return state;
+  }
+
+  /** Mocks the token endpoint and the consumer authz endpoint. */
+  function mockPersonalEndpoints() {
+    vi.mocked(fetch).mockImplementation(async (url: RequestInfo | URL, init?: RequestInit) => {
+      const urlStr = String(url);
+      if (urlStr.includes('/oauth2/v2.0/token')) {
+        const scope = new URLSearchParams(String(init?.body)).get('scope') ?? '';
+        return new Response(JSON.stringify(makeTokenResponse(scope, 1800)), { status: 200 });
+      }
+      if (urlStr.includes('/authz/consumer')) {
+        return new Response(JSON.stringify({
+          skypeToken: { skypetoken: 'new-consumer-skype-token', expiresIn: 86400, skypeid: 'live:fake.user' },
+          regionGtms: {},
+        }), { status: 200 });
+      }
+      return new Response('{}', { status: 404 });
+    });
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubGlobal('fetch', vi.fn());
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('calls the consumers token endpoint with the personal client, scopes and origin', async () => {
+    installPersonalSession();
+    mockPersonalEndpoints();
+
+    const result = await refreshTokensViaHttp();
+    expect(result.ok).toBe(true);
+
+    const tokenCalls = vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes('/oauth2/v2.0/token'));
+    expect(tokenCalls).toHaveLength(2);
+    const scopes: string[] = [];
+    for (const [url, init] of tokenCalls) {
+      expect(String(url)).toBe('https://login.microsoftonline.com/consumers/oauth2/v2.0/token');
+      expect((init!.headers as Record<string, string>)['Origin']).toBe('https://teams.live.com');
+      const body = new URLSearchParams(String(init!.body));
+      expect(body.get('client_id')).toBe(PERSONAL_CLIENT_ID);
+      expect(body.get('grant_type')).toBe('refresh_token');
+      scopes.push(body.get('scope') ?? '');
+    }
+    expect(scopes.some(s => s.split(' ').includes(PERSONAL_MT_SCOPE))).toBe(true);
+    expect(scopes.some(s => s.split(' ').includes(PERSONAL_AUTH_SCOPE))).toBe(true);
+    for (const scope of scopes) {
+      expect(scope.split(' ')).toEqual(expect.arrayContaining(['openid', 'profile', 'offline_access']));
+    }
+  });
+
+  it('exchanges the auth token at the consumer authz endpoint with the client headers', async () => {
+    installPersonalSession();
+    mockPersonalEndpoints();
+
+    await refreshTokensViaHttp();
+
+    const authzCalls = vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes('/authz/consumer'));
+    expect(authzCalls).toHaveLength(1);
+    const [url, init] = authzCalls[0];
+    expect(String(url)).toBe('https://teams.live.com/api/auth/v2.0/authz/consumer');
+    const headers = init!.headers as Record<string, string>;
+    expect(headers['Authorization']).toMatch(/^Bearer new-access-token-for-/);
+    expect(headers['Authorization']).toContain(PERSONAL_AUTH_SCOPE);
+    expect(headers['ms-teams-authz-type']).toBe('TokenRefresh');
+    expect(headers['x-ms-client-type']).toBe('web');
+    expect(headers['x-ms-client-version']).toBe(TEAMS_CLIENT_VERSION);
+  });
+
+  it('writes cookies on teams.live.com, new access tokens with expiresOn and the Skype ID', async () => {
+    installPersonalSession();
+    mockPersonalEndpoints();
+
+    const result = await refreshTokensViaHttp();
+    expect(result.ok).toBe(true);
+
+    const saved = vi.mocked(writeSessionState).mock.calls.at(-1)![0];
+    const live = (name: string) => saved.cookies.filter(c =>
+      c.name === name && c.domain?.replace(/^\./, '') === 'teams.live.com');
+    expect(live('skypetoken_asm')).toHaveLength(1);
+    expect(live('skypetoken_asm')[0].value).toBe('new-consumer-skype-token');
+    expect(live('authtoken')).toHaveLength(1);
+    expect(decodeURIComponent(live('authtoken')[0].value)).toContain('Bearer=');
+    // The work-domain cookie is untouched.
+    expect(saved.cookies.find(c => c.domain === '.teams.microsoft.com')?.value).toBe('fake-work-skypetoken');
+
+    const entries = saved.origins[0].localStorage
+      .map(item => { try { return JSON.parse(item.value); } catch { return null; } })
+      .filter(entry => entry?.credentialType === 'AccessToken');
+    const refreshed = entries.filter(entry => String(entry.secret).startsWith('new-access-token-for-'));
+    expect(refreshed.length).toBeGreaterThanOrEqual(2);
+    const nowSec = Math.floor(Date.now() / 1000);
+    for (const entry of refreshed) {
+      expect(entry.realm).toBe('9188040d-6c67-4c5b-b112-36a304b66dad');
+      expect(typeof entry.expiresOn).toBe('string');
+      expect(Number(entry.expiresOn)).toBeGreaterThan(nowSec);
+      expect(Number(entry.expiresOn)).toBeLessThanOrEqual(nowSec + 1800 + 5);
+    }
+    expect(refreshed.some(entry => String(entry.target).includes(PERSONAL_MT_SCOPE))).toBe(true);
+    expect(refreshed.some(entry => String(entry.target).includes(PERSONAL_AUTH_SCOPE))).toBe(true);
+
+    const skypeId = saved.origins[0].localStorage.find(item => item.name === PERSONAL_SKYPEID_KEY);
+    expect(skypeId?.value).toBe('live:fake.user');
+  });
+
+  it.each(['assignments', 'graph'] as const)('does not call fetch for the %s resource', async (resource) => {
+    installPersonalSession();
+
+    const result = await refreshTokensViaHttp(resource);
+
+    expect(fetch).not.toHaveBeenCalled();
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).not.toBe('AUTH_REQUIRED');
+      expect(result.error.code).not.toBe('AUTH_EXPIRED');
+      expect(result.error.retryable).toBe(false);
+    }
+  });
 });

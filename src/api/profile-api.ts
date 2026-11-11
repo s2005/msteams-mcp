@@ -7,7 +7,7 @@
  */
 
 import { httpRequest } from '../utils/http.js';
-import { MT_API, getSkypeAuthHeaders } from '../utils/api-config.js';
+import { MT_API, PERSONAL_MT_API, getSkypeAuthHeaders, getPersonalMtHeaders } from '../utils/api-config.js';
 import { type Result, ok } from '../types/result.js';
 import { requireSkypeSpacesAuthWithConfig } from '../utils/auth-guards.js';
 
@@ -60,16 +60,20 @@ export async function resolveProfiles(
   if (!authResult.ok) {
     return authResult;
   }
-  const { skypeToken, spacesToken, regionConfig } = authResult.value;
+  const { skypeToken, spacesToken, personal, regionConfig } = authResult.value;
 
   const { teamsBaseUrl: baseUrl } = regionConfig;
-  const url = MT_API.fetchShortProfile(regionConfig.regionPartition, regionConfig.hasPartition, baseUrl);
+  const url = personal
+    ? PERSONAL_MT_API.fetchShortProfile(regionConfig.middleTierUrl)
+    : MT_API.fetchShortProfile(regionConfig.regionPartition, regionConfig.hasPartition, baseUrl);
 
   const response = await httpRequest<{ value?: unknown[] }>(
     url,
     {
       method: 'POST',
-      headers: getSkypeAuthHeaders(skypeToken, spacesToken, baseUrl),
+      headers: personal
+        ? getPersonalMtHeaders(skypeToken, spacesToken)
+        : getSkypeAuthHeaders(skypeToken, spacesToken, baseUrl),
       body: JSON.stringify(mris),
     }
   );

@@ -17,6 +17,8 @@ export enum ErrorCode {
   ACCESS_DENIED = 'ACCESS_DENIED',
   /** Rate limited by the API. */
   RATE_LIMITED = 'RATE_LIMITED',
+  /** Tool is not available for the signed-in account type. */
+  NOT_SUPPORTED = 'NOT_SUPPORTED',
   /** Requested resource was not found. */
   NOT_FOUND = 'NOT_FOUND',
   /** Invalid input parameters. */
@@ -96,6 +98,8 @@ function getDefaultSuggestions(code: ErrorCode): string[] {
       ];
     case ErrorCode.ACCESS_DENIED:
       return ['Check your access and required consent with the tenant administrator'];
+    case ErrorCode.NOT_SUPPORTED:
+      return ['Use a tool available for the signed-in account type'];
     case ErrorCode.NOT_FOUND:
       return ['Check the ID/query is correct', 'Verify the resource exists'];
     case ErrorCode.INVALID_INPUT:
