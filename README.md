@@ -229,6 +229,18 @@ Download attachments (Word, PowerPoint and other files) with `teams_download_fil
 | `teams_login`  | Trigger manual login (opens browser)   |
 | `teams_status` | Check authentication and session state |
 
+`teams_login` takes two optional parameters. `forceNew` deletes all saved login data and signs in from scratch (default: false). `accountType` is `work` (work or school account, `teams.microsoft.com`) or `personal` (personal Microsoft account using Teams free, `teams.live.com`). When `accountType` is omitted, the saved session's type is kept, or `work` is used when there is no session. See [Personal accounts (Teams free)](#personal-accounts-teams-free).
+
+### Personal accounts (Teams free)
+
+Sign in with a personal Microsoft account by passing `accountType: "personal"` to `teams_login`. Only these tools work on a personal account:
+
+`teams_login`, `teams_status`, `teams_get_me`, `teams_list_chats`, `teams_get_chat`, `teams_get_thread`, `teams_get_message`, `teams_send_message`, `teams_edit_message`, `teams_delete_message`, `teams_add_reaction`, `teams_remove_reaction`, `teams_mark_read`, `teams_search_people`, `teams_get_person`, `teams_get_favorites`, `teams_add_favorite`, `teams_remove_favorite`, `teams_get_meetings`.
+
+Every other tool returns a `NOT_SUPPORTED` error that lists the supported tools. `teams_get_chat` is not yet verified on personal accounts.
+
+The server holds one account per config directory (see [Session Files](#session-files)). To use a work account and a personal account side by side, give each its own config directory: on Windows set a separate `APPDATA` for the second process, on macOS/Linux a separate `HOME`.
+
 
 
 
@@ -287,6 +299,7 @@ msteams status
 # Log in (opens a browser; tries silent SSO first)
 msteams login
 msteams login --force        # clear session and re-login
+msteams login --accountType personal   # personal Microsoft account (Teams free)
 
 # Search messages
 msteams search "meeting notes"
@@ -327,6 +340,7 @@ npm run cli                          # command list
 npm run cli -- search "your query"
 npm run cli -- status
 npm run cli -- send "Hi" --to "conversation-id"
+npm run cli -- login --accountType personal   # personal Microsoft account (Teams free)
 ```
 
 ## Limitations
@@ -336,6 +350,7 @@ npm run cli -- send "Hi" --to "conversation-id"
 - **Undocumented APIs** - Uses Microsoft's internal APIs which may change without notice
 - **Search limitations** - Full-text search only; thread replies not matching search terms won't appear (but LLM will likely use `teams_get_thread` for full context)
 - **Assignments** - Education tenants only. Turn-in and undo turn-in act on your real account; handing in again records a new hand-in date that your teacher sees
+- **Personal accounts** - Teams free accounts support a subset of tools (see [Personal accounts (Teams free)](#personal-accounts-teams-free)); the rest return `NOT_SUPPORTED`. `teams_get_chat` is not yet verified on them
 
 
 

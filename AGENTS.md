@@ -35,6 +35,7 @@ src/
 │   ├── assignment-tools.ts # EDU Assignments tools (list, get with attachments, submission actions)
 │   └── auth-tools.ts     # Login and status tools
 ├── auth/                 # Authentication and credential management
+│   ├── account-type.ts   # Work vs personal (Teams free) detection from the saved session, plus personal constants
 │   ├── crypto.ts         # AES-256-GCM encryption for credentials at rest
 │   ├── session-store.ts  # Secure session state storage with encryption
 │   ├── token-extractor.ts # Extract tokens from Playwright session state
@@ -149,6 +150,20 @@ The `extract*`/`getValid*` helpers live in `auth/token-extractor`; the `require*
 - The CSA API (favorites) needs GET to read; POST is only for modifications.
 - The Substrate suggestions API requires `cvid` and `logicalId` correlation IDs in the body.
 - Regional APIs (chatsvc, csa, mt/part) resolve their region via `getRegion()`; partitioned endpoints (mt/part Calendar) also use the partition suffix from `DISCOVER-REGION-GTM`.
+
+### Personal accounts (Teams free)
+
+A personal Microsoft account (Teams free, `teams.live.com`) is a different stack from a work account, and every account-dependent path asks `getAccountType()` in `auth/account-type.ts` first.
+
+- **Detection**: from the saved session, never from a setting. A session is personal when its `teams.live.com` origin holds an MSAL entry whose `realm` or `homeAccountId` contains the consumers tenant ID (`9188040d-6c67-4c5b-b112-36a304b66dad`). No session means work. `teams_login` takes `accountType` (`work`/`personal`); omitted, it keeps the saved session's type, so a bare re-login does not flip a personal session to the work sign-in. A requested type that differs from the saved one skips the valid-token fast path. `forceNew` clears everything as before.
+- **Hosts and identity**: `teams.live.com` is in `TEAMS_HOSTS`. The Teams free web app client ID is `4b3e8f46-56d3-427f-b1e2-d239b2ea6bca`; the tenant segment of the token endpoint is `consumers`.
+- **Scopes and tokens**: two scopes, `https://mtsvc.fl.teams.microsoft.com/teams.mt.readwrite` (mt) and `https://auth.fl.teams.microsoft.com/teams.auth.readwrite` (auth). Both tokens are opaque, not JWTs, so they are selected by MSAL `target` and their expiry comes from the entry's `expiresOn`, not from a decoded `exp`. There is no Substrate, Skype Spaces, CSA, Graph or Assignments token.
+- **HTTP refresh**: the same refresh-token flow as work accounts, but against the `consumers` token endpoint with `Origin: https://teams.live.com`. Optional resources (Assignments, Graph) are refused up front for personal sessions.
+- **Skype token**: the auth token is exchanged at `https://teams.live.com/api/auth/v2.0/authz/consumer` (POST, `Bearer` auth token, body `{}`) with `ms-teams-authz-type: TokenRefresh`, `x-ms-client-type: web` and `x-ms-client-version` set to `TEAMS_CLIENT_VERSION`. Without the two client headers it returns 400.
+- **Cookies and MRI**: the Skype token is stored as `skypetoken_asm` and the mt token as `authtoken`, both on `teams.live.com`. The Skype token may be opaque, so the Skype ID from the authz response is persisted in `teams.live.com` localStorage (`msteams-mcp:personal-skypeid`) and the user MRI is built from it (`live:<id>` becomes `8:live:<id>`).
+- **Header differences**: CSA (`getPersonalCsaHeaders`) authenticates with `X-Skypetoken` only; it rejects the `Authentication` header and takes no Authorization header. mt (`getPersonalMtHeaders`) needs `Authorization: Bearer <mt token>` plus `X-Skypetoken`. The personal endpoint sets are `PERSONAL_CSA_API` and `PERSONAL_MT_API` in `utils/api-config.ts`.
+- **People search**: no Substrate, so `api/consumer-people-api.ts` calls the mt `beta/users/searchUsers` endpoint. The response is keyed by the search term, in a case that may differ from the query, so every value is read.
+- **Guard**: `invokeTool` in `tools/registry.ts` returns `NOT_SUPPORTED` (not retryable, suggestion lists the allowed tools) for any tool outside `PERSONAL_ACCOUNT_TOOLS` when the cached account type is personal. The check runs before input validation. Add a tool to that set only after verifying it live against a personal account; `teams_get_chat` is in the set but not yet verified.
 
 ### Session persistence and encryption
 
