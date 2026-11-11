@@ -220,6 +220,26 @@ export function getSubstrateTokenStatus(): {
   };
 }
 
+/**
+ * Gets the status of the primary API token of the saved session: the Substrate
+ * token for work sessions, the opaque mt token for personal (Teams free) ones.
+ * Work sessions return exactly what getSubstrateTokenStatus() returns.
+ */
+export function getPrimaryTokenStatus(): {
+  hasToken: boolean;
+  expiresAt?: string;
+  minutesRemaining?: number;
+} {
+  if (getAccountType() !== 'personal') return getSubstrateTokenStatus();
+  const extracted = extractPersonalMtToken();
+  if (!extracted) return { hasToken: false };
+  return {
+    hasToken: true,
+    expiresAt: extracted.expiry.toISOString(),
+    minutesRemaining: Math.round((extracted.expiry.getTime() - Date.now()) / 60000),
+  };
+}
+
 // ============================================================================
 // Optional Tokens (EDU Assignments, Microsoft Graph)
 // ============================================================================
