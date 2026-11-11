@@ -38,7 +38,8 @@ import { TEAMS_URL } from '../constants.js';
 
 export const LoginInputSchema = z.object({
   forceNew: z.boolean().optional().default(false),
-  accountType: z.enum(['work', 'personal']).optional().default('work'),
+  // No schema default: an omitted value keeps the saved session's account type.
+  accountType: z.enum(['work', 'personal']).optional(),
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -58,7 +59,7 @@ const loginToolDefinition: Tool = {
       accountType: {
         type: 'string',
         enum: ['work', 'personal'],
-        description: "Kind of Microsoft account to sign in with: 'work' for a work or school account (teams.microsoft.com) or 'personal' for a personal Microsoft account using Teams free (teams.live.com). Default: work",
+        description: "Kind of Microsoft account to sign in with: 'work' for a work or school account (teams.microsoft.com) or 'personal' for a personal Microsoft account using Teams free (teams.live.com). Default: the saved session's account type, or work when there is no session",
       },
     },
   },
@@ -121,8 +122,11 @@ async function handleLogin(
   // A fresh login may have changed what the account can access (e.g. new consent)
   resetAssignmentsAvailability();
 
-  // Callers that bypass schema parsing may omit the field; work is the default.
-  const accountType = input.accountType ?? 'work';
+  // An omitted accountType keeps the saved session's type, so a bare re-login on
+  // a personal session does not switch to the work sign-in. Resolved before
+  // forceNew clears the session.
+  const accountType: AccountType = input.accountType
+    ?? (hasSessionState() ? getAccountType() : 'work');
   const loginUrl = loginUrlFor(accountType);
 
   if (input.forceNew) {

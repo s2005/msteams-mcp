@@ -35,7 +35,7 @@ vi.mock('../utils/auth-guards.js', () => ({ resetAssignmentsAvailability: vi.fn(
 
 import { loginTool, statusTool, LoginInputSchema, authTools } from './auth-tools.js';
 import { getAccountType } from '../auth/account-type.js';
-import { clearAllLocalData } from '../auth/session-store.js';
+import { clearAllLocalData, hasSessionState } from '../auth/session-store.js';
 import {
   getSubstrateTokenStatus,
   getMessageAuthStatus,
@@ -124,11 +124,39 @@ describe('teams_login core credential top-up', () => {
 });
 
 describe('teams_login accountType input', () => {
-  it('accepts work and personal, rejects anything else, defaults to work', () => {
+  it('accepts work and personal, rejects anything else, leaves an omitted value unset', () => {
     expect(LoginInputSchema.parse({ accountType: 'personal' }).accountType).toBe('personal');
     expect(LoginInputSchema.parse({ accountType: 'work' }).accountType).toBe('work');
     expect(LoginInputSchema.safeParse({ accountType: 'other' }).success).toBe(false);
-    expect(LoginInputSchema.parse({}).accountType).toBe('work');
+    expect(LoginInputSchema.parse({}).accountType).toBeUndefined();
+  });
+
+  it('keeps the saved personal account type when accountType is omitted', async () => {
+    vi.clearAllMocks();
+    vi.mocked(refreshTokensViaHttp).mockResolvedValue({ ok: true, value: undefined });
+    vi.mocked(createBrowserContext).mockResolvedValue({ page: {}, context: {} } as never);
+    vi.mocked(closeBrowser).mockResolvedValue(undefined as never);
+    vi.mocked(getSubstrateTokenStatus).mockReturnValue({ hasToken: false });
+    vi.mocked(hasSessionState).mockReturnValue(true);
+    vi.mocked(getAccountType).mockReturnValue('personal');
+
+    await loginTool.handler(LoginInputSchema.parse({}));
+
+    expect(vi.mocked(ensureAuthenticated).mock.calls[0][5]).toBe('https://teams.live.com/v2/');
+    vi.mocked(getAccountType).mockReturnValue('work');
+  });
+
+  it('uses the work login URL when accountType is omitted and no session exists', async () => {
+    vi.clearAllMocks();
+    vi.mocked(refreshTokensViaHttp).mockResolvedValue({ ok: true, value: undefined });
+    vi.mocked(createBrowserContext).mockResolvedValue({ page: {}, context: {} } as never);
+    vi.mocked(closeBrowser).mockResolvedValue(undefined as never);
+    vi.mocked(hasSessionState).mockReturnValue(false);
+
+    await loginTool.handler(LoginInputSchema.parse({ forceNew: true }));
+
+    expect(vi.mocked(ensureAuthenticated).mock.calls[0][5]).toBe('https://teams.microsoft.com');
+    vi.mocked(hasSessionState).mockReturnValue(true);
   });
 
   it('declares the enum in the JSON schema', () => {
@@ -140,6 +168,7 @@ describe('teams_login accountType input', () => {
   });
 
   it('opens the personal login URL for a personal visible login', async () => {
+    vi.clearAllMocks();
     vi.mocked(refreshTokensViaHttp).mockResolvedValue({ ok: true, value: undefined });
     vi.mocked(createBrowserContext).mockResolvedValue({ page: {}, context: {} } as never);
     vi.mocked(closeBrowser).mockResolvedValue(undefined as never);
