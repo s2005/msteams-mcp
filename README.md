@@ -235,9 +235,9 @@ Download attachments (Word, PowerPoint and other files) with `teams_download_fil
 
 Sign in with a personal Microsoft account by passing `accountType: "personal"` to `teams_login`. Only these tools work on a personal account:
 
-`teams_login`, `teams_status`, `teams_get_me`, `teams_list_chats`, `teams_get_chat`, `teams_get_thread`, `teams_get_message`, `teams_send_message`, `teams_edit_message`, `teams_delete_message`, `teams_add_reaction`, `teams_remove_reaction`, `teams_mark_read`, `teams_search_people`, `teams_get_person`, `teams_get_favorites`, `teams_add_favorite`, `teams_remove_favorite`, `teams_get_meetings`.
+`teams_login`, `teams_status`, `teams_get_me`, `teams_list_chats`, `teams_get_chat`, `teams_get_thread`, `teams_get_message`, `teams_send_message`, `teams_edit_message`, `teams_delete_message`, `teams_add_reaction`, `teams_remove_reaction`, `teams_mark_read`, `teams_search_people`, `teams_get_favorites`, `teams_add_favorite`, `teams_remove_favorite`, `teams_get_meetings`.
 
-Every other tool returns a `NOT_SUPPORTED` error that lists the supported tools. `teams_get_chat` is not yet verified on personal accounts.
+Every other tool returns a `NOT_SUPPORTED` error that lists the supported tools. On personal accounts `teams_get_chat` finds an existing 1:1 chat only (it cannot start a new one), and `teams_get_me` returns the ID and MRI without a display name.
 
 The server holds one account per config directory (see [Session Files](#session-files)). To use a work account and a personal account side by side, give each its own config directory: on Windows set a separate `APPDATA` for the second process, on macOS/Linux a separate `HOME`.
 
@@ -350,7 +350,7 @@ npm run cli -- login --accountType personal   # personal Microsoft account (Team
 - **Undocumented APIs** - Uses Microsoft's internal APIs which may change without notice
 - **Search limitations** - Full-text search only; thread replies not matching search terms won't appear (but LLM will likely use `teams_get_thread` for full context)
 - **Assignments** - Education tenants only. Turn-in and undo turn-in act on your real account; handing in again records a new hand-in date that your teacher sees
-- **Personal accounts** - Teams free accounts support a subset of tools (see [Personal accounts (Teams free)](#personal-accounts-teams-free)); the rest return `NOT_SUPPORTED`. `teams_get_chat` is not yet verified on them
+- **Personal accounts** - Teams free accounts support a subset of tools (see [Personal accounts (Teams free)](#personal-accounts-teams-free)); the rest return `NOT_SUPPORTED`. `teams_get_chat` only finds existing 1:1 chats on them, and `teams_get_me` returns no display name
 
 
 

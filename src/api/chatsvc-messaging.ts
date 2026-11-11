@@ -911,6 +911,101 @@ export function getOneOnOneChatId(
   });
 }
 
+/** Maximum number of thread member lookups run at once. */
+const PERSONAL_THREAD_LOOKUP_CONCURRENCY = 4;
+
+/** Thread type reported by chatsvc for a 1:1 chat. */
+const ONE_TO_ONE_PRODUCT_THREAD_TYPE = 'OneToOneChat';
+
+/**
+ * Normalises a user identifier to a personal-account MRI.
+ *
+ * '8:...' is kept as is; 'live:x' and any other bare value get an '8:' prefix.
+ */
+export function normalisePersonalMri(identifier: string): string {
+  const value = identifier.trim();
+  if (value.startsWith('8:')) return value;
+  return `8:${value}`;
+}
+
+/**
+ * Finds the existing 1:1 chat with another user on a personal (Teams free) account.
+ *
+ * Personal 1:1 conversation IDs (`19:uni01_...@thread.v2`) cannot be derived
+ * from user IDs, so this lists the conversations, keeps the OneToOneChat ones
+ * and reads each thread's members until one contains the other user's MRI.
+ * A new 1:1 chat cannot be started this way.
+ */
+export async function findPersonalOneOnOneChat(
+  otherUserIdentifier: string
+): Promise<Result<GetOneOnOneChatResult>> {
+  const authResult = requireMessageAuthWithConfig();
+  if (!authResult.ok) {
+    return authResult;
+  }
+  const { auth, region, baseUrl } = authResult.value;
+  const headers = getMessagingHeaders(auth.skypeToken, auth.authToken, baseUrl);
+
+  const target = normalisePersonalMri(otherUserIdentifier).toLowerCase();
+
+  const listResponse = await httpRequest<{ conversations?: unknown[] }>(
+    CHATSVC_API.conversations(region, baseUrl),
+    { method: 'GET', headers }
+  );
+  if (!listResponse.ok) {
+    return listResponse;
+  }
+
+  const rawConversations = Array.isArray(listResponse.value.data.conversations)
+    ? listResponse.value.data.conversations
+    : [];
+
+  const oneToOneIds: string[] = [];
+  for (const raw of rawConversations) {
+    const conv = (raw ?? {}) as Record<string, unknown>;
+    const props = (conv.threadProperties ?? {}) as Record<string, unknown>;
+    if (typeof conv.id === 'string' && conv.id && props.productThreadType === ONE_TO_ONE_PRODUCT_THREAD_TYPE) {
+      oneToOneIds.push(conv.id);
+    }
+  }
+
+  // Reads one thread's members; failures count as "no match" for that thread.
+  const threadHasMember = async (threadId: string): Promise<boolean> => {
+    const response = await httpRequest<{ members?: unknown[] }>(
+      CHATSVC_API.threadWithMembers(region, threadId, baseUrl),
+      { method: 'GET', headers }
+    );
+    if (!response.ok) return false;
+    const members = Array.isArray(response.value.data.members) ? response.value.data.members : [];
+    return members.some(m => {
+      const id = (m as Record<string, unknown> | null)?.id;
+      return typeof id === 'string' && id.toLowerCase() === target;
+    });
+  };
+
+  let found: string | undefined;
+  for (let i = 0; i < oneToOneIds.length && found === undefined; i += PERSONAL_THREAD_LOOKUP_CONCURRENCY) {
+    const batch = oneToOneIds.slice(i, i + PERSONAL_THREAD_LOOKUP_CONCURRENCY);
+    const hits = await Promise.all(batch.map(threadHasMember));
+    const index = hits.indexOf(true);
+    if (index !== -1) found = batch[index];
+  }
+
+  if (found === undefined) {
+    return err(createError(
+      ErrorCode.NOT_FOUND,
+      'No existing 1:1 chat with that user was found. Personal accounts cannot start a new 1:1 chat through this tool.',
+      { retryable: false, suggestions: ['Use teams_list_chats to see the existing chats and their conversation IDs.'] }
+    ));
+  }
+
+  return ok({
+    conversationId: found,
+    otherUserId: normalisePersonalMri(otherUserIdentifier),
+    currentUserId: auth.userMri,
+  });
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Group Chat
 // ─────────────────────────────────────────────────────────────────────────────

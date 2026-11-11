@@ -11,6 +11,7 @@ import {
   saveMessage,
   unsaveMessage,
   getOneOnOneChatId,
+  findPersonalOneOnOneChat,
   createGroupChat,
   editMessage,
   deleteMessage,
@@ -25,6 +26,7 @@ import {
   getConversations,
   waitForReply,
 } from '../api/chatsvc-api.js';
+import { getCachedAccountType } from '../utils/auth-guards.js';
 import { getFavorites, addFavorite, removeFavorite, getCustomEmojis } from '../api/csa-api.js';
 import { parseTeamsMessageUrl } from '../utils/parsers.js';
 import { ErrorCode, createError } from '../types/errors.js';
@@ -259,7 +261,7 @@ const unsaveMessageToolDefinition: Tool = {
 
 const getChatToolDefinition: Tool = {
   name: 'teams_get_chat',
-  description: 'Get the conversation ID for a 1:1 chat with a person. Use this to start a new chat or find an existing one. The conversation ID can then be used with teams_send_message to send messages.',
+  description: 'Get the conversation ID for a 1:1 chat with a person. Use this to start a new chat or find an existing one. The conversation ID can then be used with teams_send_message to send messages. On personal (Teams free) accounts it only finds an existing 1:1 chat (userId: 8:live:id, live:id or skype name).',
   inputSchema: {
     type: 'object',
     properties: {
@@ -696,7 +698,10 @@ async function handleUnsaveMessage(
 async function handleGetChat(
   input: z.infer<typeof GetChatInputSchema>
 ): Promise<ToolResult> {
-  const result = getOneOnOneChatId(input.userId);
+  const personal = getCachedAccountType() === 'personal';
+  const result = personal
+    ? await findPersonalOneOnOneChat(input.userId)
+    : getOneOnOneChatId(input.userId);
 
   if (!result.ok) {
     return { success: false, error: result.error };

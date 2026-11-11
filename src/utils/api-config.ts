@@ -99,6 +99,10 @@ export const CHATSVC_API = {
   deleteMessage: (region: string, conversationId: string, messageId: string, baseUrl = DEFAULT_TEAMS_BASE_URL) =>
     `${baseUrl}/api/chatsvc/${region}/v1/users/ME/conversations/${encodeURIComponent(conversationId)}/messages/${messageId}?behavior=softDelete`,
   
+  /** Get one thread with its member list (personal 1:1 lookup). */
+  threadWithMembers: (region: string, threadId: string, baseUrl = DEFAULT_TEAMS_BASE_URL) =>
+    `${baseUrl}/api/chatsvc/${region}/v1/threads/${encodeURIComponent(threadId)}?view=msnp24Equivalent`,
+
   /** Get consumption horizons (read receipts) for a thread. */
   consumptionHorizons: (region: string, threadId: string, baseUrl = DEFAULT_TEAMS_BASE_URL) =>
     `${baseUrl}/api/chatsvc/${region}/v1/threads/${encodeURIComponent(threadId)}/consumptionhorizons`,

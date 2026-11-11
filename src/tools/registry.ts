@@ -83,7 +83,6 @@ export const PERSONAL_ACCOUNT_TOOLS: ReadonlySet<string> = new Set([
   'teams_remove_reaction',
   'teams_mark_read',
   'teams_search_people',
-  'teams_get_person',
   'teams_get_favorites',
   'teams_add_favorite',
   'teams_remove_favorite',
