@@ -19,6 +19,9 @@
  * 4. Exchange Skype Spaces token for skypetoken_asm cookie
  * 5. Update session state cookies
  * 6. Write updated session state back to encrypted storage
+ *
+ * Personal (Teams free) sessions use the consumers tenant, two opaque scopes
+ * (mt and auth) and the consumer authz endpoint for the Skype token.
  */
 
 import { ASSIGNMENTS_APP_ID, GRAPH_AUDIENCES } from '../constants.js';
@@ -30,6 +33,14 @@ import {
   type SessionState,
 } from './session-store.js';
 import { decodeJwtPayload } from './token-extractor.js';
+import {
+  getAccountType,
+  PERSONAL_AUTH_SCOPE,
+  PERSONAL_MT_SCOPE,
+  PERSONAL_SKYPEID_KEY,
+  PERSONAL_TEAMS_BASE_URL,
+} from './account-type.js';
+import { TEAMS_CLIENT_VERSION } from '../utils/api-config.js';
 import { ErrorCode, createError } from '../types/errors.js';
 import { type Result, ok, err } from '../types/result.js';
 import * as log from '../utils/logger.js';
@@ -90,6 +101,16 @@ interface TokenResponse {
   ext_expires_in?: number;
 }
 
+/** Consumer authz response for the Skype token exchange. */
+interface ConsumerAuthzResponse {
+  skypeToken?: {
+    skypetoken?: string;
+    expiresIn?: number;
+    skypeid?: string;
+  };
+  regionGtms?: Record<string, unknown>;
+}
+
 /** Authsvc response for skype token exchange. */
 interface AuthsvcResponse {
   tokens?: {
@@ -108,6 +129,15 @@ const TOKEN_ENDPOINT = 'https://login.microsoftonline.com/{tenantId}/oauth2/v2.0
 
 /** Teams authsvc endpoint for skype token exchange. */
 const AUTHSVC_ENDPOINT = 'https://authsvc.teams.microsoft.com/v1.0/authz';
+
+/** Teams authz endpoint that exchanges a personal-account auth token for a Skype token. */
+const CONSUMER_AUTHZ_ENDPOINT = `${PERSONAL_TEAMS_BASE_URL}/api/auth/v2.0/authz/consumer`;
+
+/** Token endpoint tenant segment for personal accounts. */
+const CONSUMERS_TENANT_SEGMENT = 'consumers';
+
+/** Cookie domain for personal-account Teams cookies. */
+const PERSONAL_COOKIE_DOMAIN = 'teams.live.com';
 
 /** Resource key used by the on-demand Assignments refresh. */
 const ASSIGNMENTS_RESOURCE = 'EduAssignments';
@@ -163,6 +193,12 @@ const REFRESH_SCOPES: ReadonlyArray<{ resource: string; scopes: string; onDemand
     onDemand: 'graph',
     label: 'Microsoft Graph',
   },
+];
+
+/** Scopes refreshed for personal sessions; the resource field is the MSAL target. */
+const PERSONAL_REFRESH_SCOPES: ReadonlyArray<{ resource: string; scopes: string }> = [
+  { resource: PERSONAL_MT_SCOPE, scopes: `${PERSONAL_MT_SCOPE} openid profile offline_access` },
+  { resource: PERSONAL_AUTH_SCOPE, scopes: `${PERSONAL_AUTH_SCOPE} openid profile offline_access` },
 ];
 
 /** HTTP request timeout for token refresh calls (ms). */
@@ -230,8 +266,9 @@ async function refreshAccessToken(
   clientId: string,
   refreshToken: string,
   scopes: string,
+  personal = false,
 ): Promise<Result<TokenResponse>> {
-  const url = TOKEN_ENDPOINT.replace('{tenantId}', tenantId);
+  const url = TOKEN_ENDPOINT.replace('{tenantId}', personal ? CONSUMERS_TENANT_SEGMENT : tenantId);
 
   const body = new URLSearchParams({
     grant_type: 'refresh_token',
@@ -249,7 +286,7 @@ async function refreshAccessToken(
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
-        'Origin': 'https://teams.microsoft.com',
+        'Origin': personal ? PERSONAL_TEAMS_BASE_URL : 'https://teams.microsoft.com',
       },
       body: body.toString(),
       signal: AbortSignal.timeout(REFRESH_TIMEOUT_MS),
@@ -381,6 +418,71 @@ async function exchangeSkypeToken(
   }
 }
 
+/**
+ * Exchanges a personal-account auth token for a Skype token.
+ *
+ * POST to the Teams consumer authz endpoint with the auth.fl bearer token.
+ * The two client headers are required; without them the endpoint returns 400.
+ */
+export async function exchangeConsumerSkypeToken(
+  authToken: string,
+): Promise<Result<{ skypeToken: string; expiresIn: number; skypeId?: string }>> {
+  try {
+    const response = await fetch(CONSUMER_AUTHZ_ENDPOINT, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${authToken}`,
+        'ms-teams-authz-type': 'TokenRefresh',
+        'x-ms-client-type': 'web',
+        'x-ms-client-version': TEAMS_CLIENT_VERSION,
+        'Content-Type': 'application/json',
+      },
+      body: '{}',
+      signal: AbortSignal.timeout(REFRESH_TIMEOUT_MS),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => '');
+      return err(createError(
+        ErrorCode.AUTH_EXPIRED,
+        `Consumer Skype token exchange failed: HTTP ${response.status}: ${errorText.substring(0, 200)}`,
+        { retryable: false }
+      ));
+    }
+
+    const data = await response.json() as ConsumerAuthzResponse;
+    const skypeToken = data.skypeToken?.skypetoken;
+    if (!skypeToken) {
+      return err(createError(
+        ErrorCode.UNKNOWN,
+        'Consumer Skype token exchange returned no token',
+        { retryable: false }
+      ));
+    }
+
+    return ok({
+      skypeToken,
+      expiresIn: data.skypeToken?.expiresIn ?? 86400,
+      skypeId: data.skypeToken?.skypeid,
+    });
+
+  } catch (error) {
+    if (error instanceof Error && error.name === 'TimeoutError') {
+      return err(createError(
+        ErrorCode.TIMEOUT,
+        'Consumer Skype token exchange timed out',
+        { retryable: true }
+      ));
+    }
+
+    return err(createError(
+      ErrorCode.NETWORK_ERROR,
+      `Consumer Skype token exchange error: ${error instanceof Error ? error.message : String(error)}`,
+      { retryable: true }
+    ));
+  }
+}
+
 // ============================================================================
 // Session State Update
 // ============================================================================
@@ -434,12 +536,16 @@ function updateAccessTokenInCache(
   resource: string,
   tokenResponse: TokenResponse,
   cacheInfo: MsalCacheInfo,
+  personal = false,
 ): void {
   // Qualify Assignments scopes: Graph can return the same bare permission names
   // for the same account/client, but a different audience.
-  const target = resource === ASSIGNMENTS_RESOURCE
+  let target = resource === ASSIGNMENTS_RESOURCE
     ? tokenResponse.scope.split(/\s+/).filter(Boolean).map(scope => scope.includes('/') ? scope : `${ASSIGNMENTS_APP_ID}/${scope}`).join(' ')
     : tokenResponse.scope;
+  // Personal entries are located by the full scope URL; keep it in the target
+  // even if the response echoes only bare permission names.
+  if (personal && !target.includes(resource)) target = `${resource} ${target}`.trim();
   const existing = findAccessToken(localStorage, resource);
   const now = Math.floor(Date.now() / 1000);
   const entry: MsalAccessToken = {
@@ -488,6 +594,35 @@ function updateSkypeCookies(
   });
 }
 
+/**
+ * Stores a personal-account Skype token as `skypetoken_asm` and the mt access
+ * token as `authtoken`, both on teams.live.com. Replaces existing cookies of the
+ * same name whether their domain is written with or without a leading dot.
+ */
+function updatePersonalCookies(
+  state: SessionState,
+  skypeToken: string,
+  skypeExpiresIn: number,
+  mtToken: string,
+  mtExpiresIn: number,
+): void {
+  const nowSec = Date.now() / 1000;
+  const names = new Set(['skypetoken_asm', 'authtoken']);
+  state.cookies = state.cookies.filter(c =>
+    !(names.has(c.name) && c.domain?.replace(/^\./, '') === PERSONAL_COOKIE_DOMAIN));
+  state.cookies.push(
+    {
+      name: 'skypetoken_asm', value: skypeToken, domain: PERSONAL_COOKIE_DOMAIN, path: '/',
+      expires: nowSec + skypeExpiresIn, httpOnly: true, secure: true, sameSite: 'None',
+    },
+    {
+      name: 'authtoken', value: `Bearer%3D${encodeURIComponent(mtToken)}`,
+      domain: PERSONAL_COOKIE_DOMAIN, path: '/',
+      expires: nowSec + mtExpiresIn, httpOnly: false, secure: true, sameSite: 'None',
+    },
+  );
+}
+
 // ============================================================================
 // Main Refresh Function
 // ============================================================================
@@ -527,6 +662,16 @@ export async function refreshTokensViaHttp(resource: 'core' | OnDemandResource =
     ));
   }
 
+  const personal = getAccountType(state) === 'personal';
+  if (personal && resource !== 'core') {
+    // Assignments and Graph are work/school features; this must not trigger auto-login.
+    return err(createError(
+      ErrorCode.API_ERROR,
+      `${resource === 'assignments' ? 'Assignments' : 'Microsoft Graph'} is not available for personal (Teams free) accounts.`,
+      { retryable: false }
+    ));
+  }
+
   const { cacheInfo, refreshTokenEntry } = extracted;
   // Non-null: extraction found the refresh token in this origin's localStorage.
   const localStorage = getTeamsOrigin(state)!.localStorage;
@@ -538,13 +683,19 @@ export async function refreshTokensViaHttp(resource: 'core' | OnDemandResource =
   // Azure AD may rotate the refresh token on each use
   let currentRefreshToken = cacheInfo.refreshToken;
 
-  const scopes = REFRESH_SCOPES.filter(scope => resource === 'core' ? !scope.onDemand : scope.onDemand === resource);
+  let personalMt: TokenResponse | null = null;
+  let personalAuth: TokenResponse | null = null;
+
+  const scopes: ReadonlyArray<{ resource: string; scopes: string; onDemand?: OnDemandResource }> = personal
+    ? PERSONAL_REFRESH_SCOPES
+    : REFRESH_SCOPES.filter(scope => resource === 'core' ? !scope.onDemand : scope.onDemand === resource);
   for (const scope of scopes) {
     const result = await refreshAccessToken(
       cacheInfo.tenantId,
       cacheInfo.clientId,
       currentRefreshToken,
       scope.scopes,
+      personal,
     );
 
     if (!result.ok) {
@@ -557,10 +708,12 @@ export async function refreshTokensViaHttp(resource: 'core' | OnDemandResource =
       continue;
     }
 
-    updateAccessTokenInCache(localStorage, scope.resource, result.value, cacheInfo);
+    updateAccessTokenInCache(localStorage, scope.resource, result.value, cacheInfo, personal);
     tokensRefreshed++;
     if (result.value.refresh_token) currentRefreshToken = result.value.refresh_token;
     if (scope.resource === 'api.spaces.skype.com') skypeSpaces = result.value;
+    if (scope.resource === PERSONAL_MT_SCOPE) personalMt = result.value;
+    if (scope.resource === PERSONAL_AUTH_SCOPE) personalAuth = result.value;
   }
 
   if (tokensRefreshed === 0) {
@@ -581,7 +734,25 @@ export async function refreshTokensViaHttp(resource: 'core' | OnDemandResource =
 
   // Exchange Skype Spaces token for skypetoken_asm
   let skypeTokenRefreshed = false;
-  if (skypeSpaces) {
+  if (personal) {
+    // Personal accounts: the auth token buys the Skype token; the mt token becomes the authtoken cookie.
+    const auth = personalAuth as TokenResponse | null;
+    const mt = personalMt as TokenResponse | null;
+    if (auth && mt) {
+      const skypeResult = await exchangeConsumerSkypeToken(auth.access_token);
+      if (skypeResult.ok) {
+        updatePersonalCookies(state, skypeResult.value.skypeToken, skypeResult.value.expiresIn,
+          mt.access_token, mt.expires_in);
+        // The consumer Skype token may be opaque; keep its Skype ID for the user MRI.
+        if (skypeResult.value.skypeId) {
+          upsertLocalStorage(localStorage, PERSONAL_SKYPEID_KEY, skypeResult.value.skypeId);
+        }
+        skypeTokenRefreshed = true;
+      } else {
+        log.warn('token-refresh-http', `Skype token exchange failed: ${skypeResult.error.message}`);
+      }
+    }
+  } else if (skypeSpaces) {
     const skypeResult = await exchangeSkypeToken(skypeSpaces.access_token);
     if (skypeResult.ok) {
       updateSkypeCookies(state, skypeResult.value.skypeToken, skypeResult.value.expiresIn,

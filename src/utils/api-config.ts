@@ -309,10 +309,13 @@ export function getCsaHeaders(skypeToken: string, csaToken: string, baseUrl = DE
   };
 }
 
+/** Teams web client version sent to chatsvc and the consumer authz endpoint. */
+export const TEAMS_CLIENT_VERSION = '1415/1.0.0.2025010401';
+
 /** Client version header for messaging API. */
 export function getMessagingHeaders(skypeToken: string, authToken: string, baseUrl = DEFAULT_TEAMS_BASE_URL): Record<string, string> {
   return {
     ...getSkypeAuthHeaders(skypeToken, authToken, baseUrl),
-    'X-Ms-Client-Version': '1415/1.0.0.2025010401',
+    'X-Ms-Client-Version': TEAMS_CLIENT_VERSION,
   };
 }

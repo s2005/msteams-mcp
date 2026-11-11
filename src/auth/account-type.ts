@@ -35,6 +35,13 @@ export const PERSONAL_MT_SCOPE = 'https://mtsvc.fl.teams.microsoft.com/teams.mt.
 export const PERSONAL_AUTH_SCOPE = 'https://auth.fl.teams.microsoft.com/teams.auth.readwrite';
 
 /**
+ * localStorage key (teams.live.com origin) under which token refresh persists the
+ * Skype ID returned by the consumer authz exchange. The consumer Skype token may
+ * be opaque, so the user MRI cannot always be read from it.
+ */
+export const PERSONAL_SKYPEID_KEY = 'msteams-mcp:personal-skypeid';
+
+/**
  * Pure check: does this session hold a consumers-tenant MSAL entry on the
  * teams.live.com origin?
  */

@@ -11,6 +11,7 @@ import {
   extractPersonalMtToken,
   extractPersonalAuthToken,
 } from './token-extractor.js';
+import { PERSONAL_SKYPEID_KEY } from './account-type.js';
 import type { SessionState } from './session-store.js';
 import { personalSessionState, workSessionState } from '../__fixtures__/api-responses.js';
 
@@ -89,6 +90,18 @@ describe('extractMessageAuth', () => {
     const auth = extractMessageAuth(state);
     expect(auth?.authToken).toBe('fake-personal-authtoken');
     expect(auth?.userMri).toBe('8:live:fake.user');
+  });
+
+  it('falls back to the persisted Skype ID when the personal Skype token is opaque', () => {
+    expect(extractMessageAuth(personal)).toBeNull();
+    const state: SessionState = {
+      ...personal,
+      origins: personal.origins.map(o => ({
+        ...o,
+        localStorage: [...o.localStorage, { name: PERSONAL_SKYPEID_KEY, value: 'live:fake.user' }],
+      })),
+    };
+    expect(extractMessageAuth(state)?.userMri).toBe('8:live:fake.user');
   });
 });
 

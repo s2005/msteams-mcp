@@ -16,6 +16,7 @@ import {
 } from './session-store.js';
 import {
   getAccountType,
+  PERSONAL_SKYPEID_KEY,
   PERSONAL_TEAMS_BASE_URL,
   PERSONAL_MT_SCOPE,
   PERSONAL_AUTH_SCOPE,
@@ -457,8 +458,14 @@ export function extractMessageAuth(state?: SessionState): MessageAuthInfo | null
   }
 
   // Extract userMri from skypeToken's skypeid claim, or fall back to authToken's oid
-  const userMri = extractMriFromSkypeToken(skypeToken) 
+  let userMri = extractMriFromSkypeToken(skypeToken) 
     ?? extractMriFromAuthToken(authToken);
+
+  // Personal sessions: the consumer Skype token and mt token are opaque, so the
+  // Skype ID saved by the token refresh is the source of the MRI.
+  if (!userMri && getAccountType(sessionState) === 'personal') {
+    userMri = extractPersonalMri(sessionState);
+  }
 
   if (!userMri) return null;
 
@@ -522,6 +529,13 @@ export function extractMriFromSkypeToken(token: string): string | null {
     return `${MRI_TYPE_PREFIX}${skypeid}`;
   }
   return skypeid;
+}
+
+/** Reads the Skype ID persisted by the consumer token exchange and returns it as an MRI. */
+function extractPersonalMri(state: SessionState): string | null {
+  const stored = teamsLocalStorage(state).find(item => item.name === PERSONAL_SKYPEID_KEY)?.value;
+  if (!stored) return null;
+  return stored.startsWith(MRI_TYPE_PREFIX) ? stored : `${MRI_TYPE_PREFIX}${stored}`;
 }
 
 function extractMriFromAuthToken(token: string): string | null {

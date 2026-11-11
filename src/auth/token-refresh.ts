@@ -21,14 +21,17 @@
 import { ErrorCode, createError } from '../types/errors.js';
 import { type Result, ok, err } from '../types/result.js';
 import {
+  extractPersonalMtToken,
   extractSubstrateToken,
   getValidAssignmentsToken,
   getValidGraphToken,
 } from './token-extractor.js';
 import { clearTokenCache } from './session-store.js';
+import { getAccountType, PERSONAL_LOGIN_URL } from './account-type.js';
 import { refreshTokensViaHttp, type OnDemandResource } from './token-refresh-http.js';
 import { createBrowserContext, closeBrowser } from '../browser/context.js';
 import { ensureAuthenticated } from '../browser/auth.js';
+import { TEAMS_URL } from '../constants.js';
 import * as log from '../utils/logger.js';
 
 /** Serialize refreshes because both HTTP and browser flows replace session state. */
@@ -80,15 +83,30 @@ export function refreshGraphToken(): Promise<Result<string>> {
   return refreshOnDemandToken('graph', 'Microsoft Graph', getValidGraphToken);
 }
 
+/**
+ * Whether the session holds a valid primary token: the mt token for personal
+ * (Teams free) accounts, the Substrate token for work accounts.
+ */
+function hasPrimaryToken(): boolean {
+  return getAccountType() === 'personal'
+    ? extractPersonalMtToken() !== null
+    : extractSubstrateToken() !== null;
+}
+
+/** Name of the primary token for log messages. */
+function primaryTokenLabel(): string {
+  return getAccountType() === 'personal' ? 'mt' : 'Substrate';
+}
+
 async function refreshCoreTokens(): Promise<Result<void>> {
   // ── Strategy 1: HTTP refresh (fast, no browser needed) ──────────────
   // An expired access token does not block this: the MSAL refresh token in
   // session state is sufficient to acquire new resource tokens.
   const httpResult = await refreshTokensViaHttp();
-  if (httpResult.ok && extractSubstrateToken()) return ok(undefined);
+  if (httpResult.ok && hasPrimaryToken()) return ok(undefined);
 
   log.warn('token-refresh', httpResult.ok
-    ? 'HTTP refresh reported success but no valid Substrate token found, falling back to browser'
+    ? `HTTP refresh reported success but no valid ${primaryTokenLabel()} token found, falling back to browser`
     : `HTTP refresh failed: ${httpResult.error.message}, falling back to browser (session cookies may still be valid)`);
 
   // ── Strategy 2: Browser refresh (fallback) ──────────────────────────
@@ -107,14 +125,15 @@ async function refreshViaHeadlessBrowser(): Promise<Result<void>> {
 
     // headless: true fails fast if user interaction is required
     await ensureAuthenticated(manager.page, manager.context,
-      msg => log.debug('token-refresh', msg), false, true);
+      msg => log.debug('token-refresh', msg), false, true,
+      getAccountType() === 'personal' ? PERSONAL_LOGIN_URL : TEAMS_URL);
 
     // ensureAuthenticated already saved the session
     await closeBrowser(manager, false);
     manager = null;
     clearTokenCache();
 
-    if (!extractSubstrateToken()) {
+    if (!hasPrimaryToken()) {
       return err(createError(
         ErrorCode.AUTH_EXPIRED,
         'ACTION REQUIRED: Token refresh failed. You MUST call teams_login to re-authenticate.',
