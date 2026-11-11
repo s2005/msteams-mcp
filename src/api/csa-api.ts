@@ -6,10 +6,10 @@
  */
 
 import { httpRequest } from '../utils/http.js';
-import { CSA_API, getCsaHeaders } from '../utils/api-config.js';
+import { CSA_API, PERSONAL_CSA_API, getCsaHeaders, getPersonalCsaHeaders } from '../utils/api-config.js';
 import { ErrorCode, createError } from '../types/errors.js';
 import { type Result, ok, err } from '../types/result.js';
-import { requireCsaAuth, getApiConfig } from '../utils/auth-guards.js';
+import { requireCsaAuth, getApiConfig, getRegionConfig, type CsaAuthInfo } from '../utils/auth-guards.js';
 import {
   getConversationProperties,
   extractParticipantNames,
@@ -18,6 +18,33 @@ import {
   parseTeamsList,
   type TeamWithChannels,
 } from '../utils/parsers.js';
+
+/** CSA endpoint names that differ between work and personal accounts. */
+type CsaEndpoint = 'conversationFolders' | 'teamsList' | 'customEmojis';
+
+/**
+ * Builds the CSA URL and request headers for the current account type.
+ * Work accounts use the regional URL with Skype + CSA tokens; personal accounts
+ * use the consumer CSA URL with the Skype token only.
+ */
+function csaRequestConfig(
+  endpoint: CsaEndpoint,
+  authInfo: CsaAuthInfo,
+): { url: string; headers: Record<string, string> } {
+  const { auth, csaToken, personal } = authInfo;
+  if (personal) {
+    const csaServiceUrl = getRegionConfig()?.csaServiceUrl ?? 'https://teams.live.com/api/csa';
+    return {
+      url: PERSONAL_CSA_API[endpoint](csaServiceUrl),
+      headers: getPersonalCsaHeaders(auth.skypeToken),
+    };
+  }
+  const { csaRegion, baseUrl } = getApiConfig();
+  return {
+    url: CSA_API[endpoint](csaRegion, baseUrl),
+    headers: getCsaHeaders(auth.skypeToken, csaToken, baseUrl),
+  };
+}
 
 /** A favourite/pinned conversation item. */
 export interface FavoriteItem {
@@ -43,16 +70,13 @@ export async function getFavorites(): Promise<Result<FavoritesResult>> {
   if (!authResult.ok) {
     return authResult;
   }
-  const { auth, csaToken } = authResult.value;
-
-  const { csaRegion, baseUrl } = getApiConfig();
-  const url = CSA_API.conversationFolders(csaRegion, baseUrl);
+  const { url, headers } = csaRequestConfig('conversationFolders', authResult.value);
 
   const response = await httpRequest<Record<string, unknown>>(
     url,
     {
       method: 'GET',
-      headers: getCsaHeaders(auth.skypeToken, csaToken, baseUrl),
+      headers,
     }
   );
 
@@ -141,9 +165,6 @@ async function modifyFavorite(
   if (!authResult.ok) {
     return authResult;
   }
-  const { auth, csaToken } = authResult.value;
-
-  const { csaRegion, baseUrl } = getApiConfig();
 
   // Get current folder state
   const currentState = await getFavorites();
@@ -158,13 +179,13 @@ async function modifyFavorite(
     ));
   }
 
-  const url = CSA_API.conversationFolders(csaRegion, baseUrl);
+  const { url, headers } = csaRequestConfig('conversationFolders', authResult.value);
 
   const response = await httpRequest<unknown>(
     url,
     {
       method: 'POST',
-      headers: getCsaHeaders(auth.skypeToken, csaToken, baseUrl),
+      headers,
       body: JSON.stringify({
         folderHierarchyVersion: currentState.value.folderHierarchyVersion,
         actions: [
@@ -201,16 +222,13 @@ export async function getMyTeamsAndChannels(): Promise<Result<TeamsListResult>> 
   if (!authResult.ok) {
     return authResult;
   }
-  const { auth, csaToken } = authResult.value;
-
-  const { csaRegion, baseUrl } = getApiConfig();
-  const url = CSA_API.teamsList(csaRegion, baseUrl);
+  const { url, headers } = csaRequestConfig('teamsList', authResult.value);
 
   const response = await httpRequest<Record<string, unknown>>(
     url,
     {
       method: 'GET',
-      headers: getCsaHeaders(auth.skypeToken, csaToken, baseUrl),
+      headers,
     }
   );
 
@@ -252,16 +270,13 @@ export async function getCustomEmojis(): Promise<Result<CustomEmojisResult>> {
   if (!authResult.ok) {
     return authResult;
   }
-  const { auth, csaToken } = authResult.value;
-
-  const { csaRegion, baseUrl } = getApiConfig();
-  const url = CSA_API.customEmojis(csaRegion, baseUrl);
+  const { url, headers } = csaRequestConfig('customEmojis', authResult.value);
 
   const response = await httpRequest<Record<string, unknown>>(
     url,
     {
       method: 'GET',
-      headers: getCsaHeaders(auth.skypeToken, csaToken, baseUrl),
+      headers,
     }
   );
 

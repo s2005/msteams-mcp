@@ -15,6 +15,7 @@ import {
   extractAssignmentsToken,
   extractGraphToken,
   extractSkypeSpacesToken,
+  extractPersonalMtToken,
   extractRegionConfig,
   getUserProfile,
   type MessageAuthInfo,
@@ -33,7 +34,10 @@ import { refreshTokensViaBrowser, refreshAssignmentsToken, refreshGraphToken } f
 /** Authentication info for messaging and CSA APIs. */
 export interface CsaAuthInfo {
   auth: MessageAuthInfo;
+  /** CSA Bearer token. Empty on personal sessions, which authenticate with the Skype token only. */
   csaToken: string;
+  /** True on personal (Teams free) sessions. */
+  personal?: boolean;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -134,6 +138,15 @@ export function requireMessageAuth(): Result<MessageAuthInfo, McpError> {
  */
 export function requireCsaAuth(): Result<CsaAuthInfo, McpError> {
   const auth = extractMessageAuth();
+
+  // Personal sessions: the consumer CSA takes only the Skype token (X-Skypetoken).
+  if (getCachedAccountType() === 'personal') {
+    if (!auth?.skypeToken) {
+      return err(createError(ErrorCode.AUTH_REQUIRED, 'ACTION REQUIRED: No valid authentication for favourites. You MUST call teams_login to authenticate before retrying.'));
+    }
+    return ok({ auth, csaToken: '', personal: true });
+  }
+
   const csaToken = extractCsaToken();
 
   if (!auth?.skypeToken || !csaToken) {
@@ -146,7 +159,10 @@ export function requireCsaAuth(): Result<CsaAuthInfo, McpError> {
 /** Authentication info for Skype Spaces APIs (calendar, tags, etc.). */
 export interface SkypeSpacesAuthInfo {
   skypeToken: string;
+  /** Skype Spaces Bearer token; on personal sessions this is the opaque middle-tier token. */
   spacesToken: string;
+  /** True on personal (Teams free) sessions. */
+  personal?: boolean;
 }
 
 /**
@@ -155,6 +171,20 @@ export interface SkypeSpacesAuthInfo {
  */
 export function requireSkypeSpacesAuth(): Result<SkypeSpacesAuthInfo, McpError> {
   const auth = extractMessageAuth();
+
+  // Personal sessions: the middle tier takes the opaque mt token instead of a Spaces token.
+  if (getCachedAccountType() === 'personal') {
+    const mtToken = extractPersonalMtToken()?.token;
+    if (!auth?.skypeToken || !mtToken) {
+      return err(createError(
+        ErrorCode.AUTH_REQUIRED,
+        'API access requires authentication. Please run teams_login.',
+        { suggestions: ['Call teams_login to authenticate'] }
+      ));
+    }
+    return ok({ skypeToken: auth.skypeToken, spacesToken: mtToken, personal: true });
+  }
+
   const spacesToken = extractSkypeSpacesToken();
 
   if (!auth?.skypeToken || !spacesToken) {
@@ -172,6 +202,8 @@ export function requireSkypeSpacesAuth(): Result<SkypeSpacesAuthInfo, McpError> 
 export interface SkypeSpacesAuthWithConfig {
   skypeToken: string;
   spacesToken: string;
+  /** True on personal (Teams free) sessions. */
+  personal?: boolean;
   regionConfig: RegionConfig;
 }
 

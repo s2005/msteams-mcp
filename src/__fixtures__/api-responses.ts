@@ -495,3 +495,29 @@ export const workSessionState = {
     },
   ],
 };
+
+/**
+ * Personal (Teams free) `POST /api/mt/beta/users/searchUsers` response, keyed by
+ * the search term (note the key differs in case from a typed "julia"). Fake values only.
+ */
+export const consumerSearchUsersResponse = {
+  Julia: {
+    status: 'Ok',
+    userProfiles: [
+      {
+        displayName: 'Julia Fake',
+        mri: '8:live:.cid.fake-julia',
+        userPrincipalName: 'julia.fake@example.invalid',
+        givenName: 'Julia',
+        surname: 'Fake',
+        objectId: '00000000-0000-0000-0000-00000000aaaa',
+      },
+      {
+        displayName: 'Julia Second',
+        mri: '8:live:.cid.fake-julia-two',
+        objectId: '00000000-0000-0000-0000-00000000bbbb',
+      },
+      { displayName: 'No Mri Person' },
+    ],
+  },
+};

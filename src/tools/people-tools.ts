@@ -7,8 +7,11 @@ import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { RegisteredTool, ToolResult } from './index.js';
 import { handleApiResult } from './index.js';
 import { searchPeople, getFrequentContacts } from '../api/substrate-api.js';
+import { searchConsumerPeople } from '../api/consumer-people-api.js';
 import { resolveProfiles } from '../api/profile-api.js';
-import { getUserProfile } from '../auth/token-extractor.js';
+import { getUserProfile, extractMessageAuth } from '../auth/token-extractor.js';
+import { getCachedAccountType } from '../utils/auth-guards.js';
+import { MRI_TYPE_PREFIX } from '../constants.js';
 import { ErrorCode, createError } from '../types/errors.js';
 import {
   DEFAULT_PEOPLE_LIMIT,
@@ -101,9 +104,46 @@ const getPersonToolDefinition: Tool = {
 // Handlers
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Builds the current user's profile on a personal (Teams free) session.
+ * Personal tokens are opaque, so there is no JWT profile: the MRI comes from the
+ * saved Skype ID and the name from the middle-tier short profile.
+ */
+async function handleGetMePersonal(): Promise<ToolResult> {
+  const auth = extractMessageAuth();
+  if (!auth) {
+    return {
+      success: false,
+      error: createError(
+        ErrorCode.AUTH_REQUIRED,
+        'No valid session. Please use teams_login first.'
+      ),
+    };
+  }
+
+  const result = await resolveProfiles([auth.userMri]);
+  return handleApiResult(result, (value) => {
+    const short = value.profiles.get(auth.userMri);
+    return {
+      profile: {
+        id: auth.userMri.startsWith(MRI_TYPE_PREFIX) ? auth.userMri.slice(MRI_TYPE_PREFIX.length) : auth.userMri,
+        mri: auth.userMri,
+        email: short?.email ?? '',
+        displayName: short?.displayName ?? '',
+        givenName: short?.givenName,
+        surname: short?.surname,
+      },
+    };
+  });
+}
+
 async function handleGetMe(
   _input: Record<string, never>
 ): Promise<ToolResult> {
+  if (getCachedAccountType() === 'personal') {
+    return handleGetMePersonal();
+  }
+
   const profile = getUserProfile();
 
   if (!profile) {
@@ -125,6 +165,15 @@ async function handleGetMe(
 async function handleSearchPeople(
   input: z.infer<typeof SearchPeopleInputSchema>
 ): Promise<ToolResult> {
+  if (getCachedAccountType() === 'personal') {
+    const personal = await searchConsumerPeople(input.query, input.limit);
+    return handleApiResult(personal, (value) => ({
+      query: input.query,
+      returned: value.length,
+      results: value,
+    }));
+  }
+
   const result = await searchPeople(input.query, input.limit);
 
   return handleApiResult(result, (value) => ({
